@@ -603,10 +603,15 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 				k++
 			}
 
-			if indexer.LastIndexedHeight+int64(blockParallelNum) > indexer.ChainHeight {
-				blockParallelNum = int(indexer.ChainHeight - indexer.LastIndexedHeight)
+			indexer.RLock()
+			lastIndexed = indexer.LastIndexedHeight
+			chainHeight = indexer.ChainHeight
+			indexer.RUnlock()
 
-				if blockParallelNum <= 0 || indexer.LastIndexedHeight == indexer.ChainHeight {
+			if lastIndexed+int64(blockParallelNum) > chainHeight {
+				blockParallelNum = int(chainHeight - lastIndexed)
+
+				if blockParallelNum <= 0 || lastIndexed == chainHeight {
 					time.Sleep(1 * time.Second)
 					continue
 				}
