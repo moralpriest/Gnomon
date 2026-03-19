@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/civilware/Gnomon/structures"
@@ -20,9 +21,8 @@ import (
 type BboltStore struct {
 	DB      *bolt.DB
 	DBPath  string
-	Writing int
-	//Writer  string
-	Closing bool
+	Writing atomic.Bool
+	Closing atomic.Bool
 	Buckets []string
 }
 

@@ -7,11 +7,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -33,7 +36,7 @@ type GnomonServer struct {
 	LastIndexedHeight int64
 	SearchFilters     []string
 	Indexers          map[string]*indexer.Indexer
-	Closing           bool
+	Closing           atomic.Bool
 	DaemonEndpoint    string
 	RunMode           string
 	DBType            string
@@ -77,7 +80,7 @@ Options:
   --derodb-dir=<"">     Defines the location where derodb can be referenced from
   --debug     Enables debug logging`
 
-var Exit_In_Progress = make(chan bool)
+var Exit_In_Progress = make(chan bool, 1)
 
 var RLI *readline.Instance
 
@@ -122,6 +125,15 @@ func main() {
 	// setup logging
 	indexer.InitLog(arguments, RLI.Stdout())
 	logger = structures.Logger.WithFields(logrus.Fields{})
+
+	// Handle SIGINT/SIGTERM gracefully
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+		logger.Printf("[Main] Received shutdown signal, initiating graceful shutdown...")
+		Gnomon.Close()
+	}()
 
 	// Set variables from arguments
 	gnomondb_wd, err := os.Getwd()
@@ -405,6 +417,11 @@ func main() {
 	Gnomon.Indexers[csearch_filter] = defaultIndexer
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[readline_loop] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			if err = Gnomon.readline_loop(RLI); err == nil {
 				break
@@ -414,6 +431,11 @@ func main() {
 
 	// This tiny goroutine continuously updates status as required
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[status_update] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			select {
 			case <-Exit_In_Progress:
@@ -421,7 +443,7 @@ func main() {
 				return
 			default:
 			}
-			if Gnomon.Closing {
+			if Gnomon.Closing.Load() {
 				return
 			}
 
@@ -1764,7 +1786,7 @@ func scidExist(s []string, str string) bool {
 }
 
 func (g *GnomonServer) Close() {
-	g.Closing = true
+	g.Closing.Store(true)
 
 	for _, v := range g.Indexers {
 		go v.Close()

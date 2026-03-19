@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/civilware/Gnomon/mbllookup"
@@ -45,7 +46,7 @@ type Indexer struct {
 	GravDBBackend     *storage.GravitonStore
 	BBSBackend        *storage.BboltStore
 	DBType            string
-	Closing           bool
+	Closing           atomic.Bool
 	RPC               *Client
 	Endpoint          string
 	RunMode           string
@@ -61,7 +62,19 @@ type Indexer struct {
 // Defines the number of blocks to jump when testing pruned nodes.
 const block_jump = int64(10000)
 
-var Connected bool = false
+var connected atomic.Value
+
+func IsConnected() bool {
+	v := connected.Load()
+	if v == nil {
+		return false
+	}
+	return v.(bool)
+}
+
+func SetConnected(b bool) {
+	connected.Store(b)
+}
 
 // local logger
 var logger *logrus.Entry
@@ -103,7 +116,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 
 	// Simple connect loop .. if connection fails initially then keep trying, else break out and continue on. Connect() is handled in getInfo() for retries later on if connection ceases again
 	for {
-		if indexer.Closing {
+		if indexer.Closing.Load() {
 			// Break out on closing call
 			break
 		}
@@ -123,7 +136,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	time.Sleep(1 * time.Second)
 
 	for {
-		if indexer.Closing {
+		if indexer.Closing.Load() {
 			// Break out on closing call
 			break
 		}
@@ -226,14 +239,14 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			writeWait, _ := time.ParseDuration("20ms")
 			switch indexer.DBType {
 			case "gravdb":
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 				var ctrees []*graviton.Tree
 				// Hardcoded SCIDs are stored with the chain, assume no owner since none is returned
 				sotree, sochanges, err := indexer.GravDBBackend.StoreOwner(vi, "", true)
@@ -280,16 +293,16 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 						//logger.Debugf("[StartDaemonMode-hardcodedscids] DEBUG - cv [%v]", cv)
 					}
 				}
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 			case "boltdb":
-				for indexer.BBSBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.BBSBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-StartDaemonMode-hardcodedscids] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 					time.Sleep(writeWait)
 				}
-				indexer.BBSBackend.Writing = 1
+				indexer.BBSBackend.Writing.Store(true)
 				//indexer.BBSBackend.Writer = "StartDaemonMode"
 				// Hardcoded SCIDs are stored with the chain, assume no owner since none is returned
 				_, err := indexer.BBSBackend.StoreOwner(vi, "")
@@ -312,7 +325,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 						logger.Errorf("[StartDaemonMode-hardcodedscids] ERR - storing scid interaction height: %v", err)
 					}
 				}
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 			}
 		}
@@ -434,9 +447,15 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	logger.Printf("[StartDaemonMode] Set number of parallel blocks to index to '%d'. Starting index routine...", blockParallelNum)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Fatalf("[StartDaemonMode] PANIC recovered: %v", r)
+				indexer.Closing.Store(true)
+			}
+		}()
 		k := 0
 		for {
-			if indexer.Closing {
+			if indexer.Closing.Load() {
 				indexer.Status = "closing"
 				logger.Printf("[StartDaemonMode] Closing indexer...")
 				// Break out on closing call
@@ -460,33 +479,33 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 						currIndex := indexer.LastIndexedHeight
 						rewindIndex := int64(0)
 						for {
-							if indexer.Closing {
+							if indexer.Closing.Load() {
 								// If we do concurrent blocks in the future, this will need to move/be modified to be *after* all concurrent blocks are done incase exit etc.
 								writeWait, _ := time.ParseDuration("20ms")
 								switch indexer.DBType {
 								case "gravdb":
-									for indexer.GravDBBackend.Writing == 1 {
-										if indexer.Closing {
+									for indexer.GravDBBackend.Writing.Load() {
+										if indexer.Closing.Load() {
 											return
 										}
 										//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 										time.Sleep(writeWait)
 									}
-									indexer.GravDBBackend.Writing = 1
+									indexer.GravDBBackend.Writing.Store(true)
 									indexer.GravDBBackend.StoreLastIndexHeight(currIndex, false)
-									indexer.GravDBBackend.Writing = 0
+									indexer.GravDBBackend.Writing.Store(false)
 								case "boltdb":
-									for indexer.BBSBackend.Writing == 1 {
-										if indexer.Closing {
+									for indexer.BBSBackend.Writing.Load() {
+										if indexer.Closing.Load() {
 											return
 										}
 										//logger.Debugf("[Indexer-StartDaemonMode-StoreLastIndexHeight] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 										time.Sleep(writeWait)
 									}
-									indexer.BBSBackend.Writing = 1
+									indexer.BBSBackend.Writing.Store(true)
 									//indexer.BBSBackend.Writer = "StartDaemonMode"
 									indexer.BBSBackend.StoreLastIndexHeight(currIndex)
-									indexer.BBSBackend.Writing = 0
+									indexer.BBSBackend.Writing.Store(false)
 									//indexer.BBSBackend.Writer = ""
 								}
 								// Break out on closing call
@@ -509,33 +528,33 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 								// Self-contain and loop through at most 10 or X blocks
 								logger.Printf("GetBlock worked at %v", currIndex)
 								for {
-									if indexer.Closing {
+									if indexer.Closing.Load() {
 										// If we do concurrent blocks in the future, this will need to move/be modified to be *after* all concurrent blocks are done incase exit etc.
 										writeWait, _ := time.ParseDuration("20ms")
 										switch indexer.DBType {
 										case "gravdb":
-											for indexer.GravDBBackend.Writing == 1 {
-												if indexer.Closing {
+											for indexer.GravDBBackend.Writing.Load() {
+												if indexer.Closing.Load() {
 													return
 												}
 												//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 												time.Sleep(writeWait)
 											}
-											indexer.GravDBBackend.Writing = 1
+											indexer.GravDBBackend.Writing.Store(true)
 											indexer.GravDBBackend.StoreLastIndexHeight(rewindIndex, false)
-											indexer.GravDBBackend.Writing = 0
+											indexer.GravDBBackend.Writing.Store(false)
 										case "boltdb":
-											for indexer.BBSBackend.Writing == 1 {
-												if indexer.Closing {
+											for indexer.BBSBackend.Writing.Load() {
+												if indexer.Closing.Load() {
 													return
 												}
 												//logger.Debugf("[Indexer-StartDaemonMode-StoreLastIndexHeight] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 												time.Sleep(writeWait)
 											}
-											indexer.BBSBackend.Writing = 1
+											indexer.BBSBackend.Writing.Store(true)
 											//indexer.BBSBackend.Writer = "StartDaemonMode"
 											indexer.BBSBackend.StoreLastIndexHeight(rewindIndex)
-											indexer.BBSBackend.Writing = 0
+											indexer.BBSBackend.Writing.Store(false)
 											//indexer.BBSBackend.Writer = ""
 										}
 
@@ -596,7 +615,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 
 			for i := 1; i <= blockParallelNum; i++ {
 				go func(i int) {
-					if indexer.Closing {
+					if indexer.Closing.Load() {
 						wg.Done()
 						return
 					}
@@ -628,7 +647,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			}
 			wg.Wait()
 
-			if indexer.Closing {
+			if indexer.Closing.Load() {
 				break
 			}
 
@@ -678,31 +697,31 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 				writeWait, _ := time.ParseDuration("20ms")
 				switch indexer.DBType {
 				case "gravdb":
-					for indexer.GravDBBackend.Writing == 1 {
-						if indexer.Closing {
+					for indexer.GravDBBackend.Writing.Load() {
+						if indexer.Closing.Load() {
 							return
 						}
 						//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 						time.Sleep(writeWait)
 					}
-					indexer.GravDBBackend.Writing = 1
+					indexer.GravDBBackend.Writing.Store(true)
 					_, _, err := indexer.GravDBBackend.StoreLastIndexHeight(indexer.LastIndexedHeight, false)
 					if err != nil {
 						logger.Errorf("[StartDaemonMode-mainFOR-StoreLastIndexHeight] ERROR - %v", err)
 					}
-					indexer.GravDBBackend.Writing = 0
+					indexer.GravDBBackend.Writing.Store(false)
 				case "boltdb":
-					for indexer.BBSBackend.Writing == 1 {
-						if indexer.Closing {
+					for indexer.BBSBackend.Writing.Load() {
+						if indexer.Closing.Load() {
 							return
 						}
 						//logger.Debugf("[Indexer-StartDaemonMode-StoreLastIndexHeight] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 						time.Sleep(writeWait)
 					}
-					indexer.BBSBackend.Writing = 1
+					indexer.BBSBackend.Writing.Store(true)
 					//indexer.BBSBackend.Writer = "StartDaemonMode"
 					indexer.BBSBackend.StoreLastIndexHeight(indexer.LastIndexedHeight)
-					indexer.BBSBackend.Writing = 0
+					indexer.BBSBackend.Writing.Store(false)
 					//indexer.BBSBackend.Writer = ""
 				}
 			}
@@ -722,7 +741,7 @@ func (indexer *Indexer) StartWalletMode(runType string) {
 		client.WS, _, err = websocket.DefaultDialer.Dial("ws://"+endpoint+"/ws", http.Header{"Authorization": astr})
 	*/
 	for {
-		if indexer.Closing {
+		if indexer.Closing.Load() {
 			// Break out on closing call
 			break
 		}
@@ -747,8 +766,14 @@ func (indexer *Indexer) StartWalletMode(runType string) {
 		time.Sleep(1 * time.Second)
 
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Fatalf("[StartWalletMode] PANIC recovered: %v", r)
+					indexer.Closing.Store(true)
+				}
+			}()
 			for {
-				if indexer.Closing {
+				if indexer.Closing.Load() {
 					// Break out on closing call
 					break
 				}
@@ -795,7 +820,7 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 		go func(scid string, fsi *structures.FastSyncImport) {
 			defer bar.Add(1)
 			// Check if already validated
-			if (scidExist(indexer.ValidatedSCs, scid) || indexer.Closing) && !varstoreonly {
+			if (scidExist(indexer.ValidatedSCs, scid) || indexer.Closing.Load()) && !varstoreonly {
 				//logger.Debugf("[AddSCIDToIndex] SCID '%v' already in validated list.", scid)
 				wg.Done()
 
@@ -872,18 +897,18 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 				}
 
 				writeWait, _ := time.ParseDuration("20ms")
-				for tempdb.Writing == 1 {
-					if indexer.Closing {
+				for tempdb.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
 
-				if indexer.Closing {
+				if indexer.Closing.Load() {
 					return
 				}
-				tempdb.Writing = 1
+				tempdb.Writing.Store(true)
 				var ctrees []*graviton.Tree
 
 				var sochanges bool
@@ -946,7 +971,7 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 						//logger.Debugf("[AddSCIDToIndex] DEBUG - cv [%v]", cv)
 					}
 				}
-				tempdb.Writing = 0
+				tempdb.Writing.Store(false)
 			} else {
 				logger.Debugf("[AddSCIDToIndex] ERR - SCID '%v' doesn't exist at height %v", v.scid, indexer.ChainHeight)
 			}
@@ -962,18 +987,18 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 			}
 
 			writeWait, _ := time.ParseDuration("20ms")
-			for tempdb.Writing == 1 {
-				if indexer.Closing {
+			for tempdb.Writing.Load() {
+				if indexer.Closing.Load() {
 					return
 				}
 				//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 				time.Sleep(writeWait)
 			}
 
-			if indexer.Closing {
+			if indexer.Closing.Load() {
 				return
 			}
-			tempdb.Writing = 1
+			tempdb.Writing.Store(true)
 			var ctrees []*graviton.Tree
 
 			var sochanges bool
@@ -1014,7 +1039,7 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 					//logger.Debugf("[AddSCIDToIndex] DEBUG - cv [%v]", cv)
 				}
 			}
-			tempdb.Writing = 0
+			tempdb.Writing.Store(false)
 		}
 	}
 
@@ -1026,18 +1051,18 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 
 		logger.Printf("[AddSCIDToIndex] Starting - Committing RAM SCID sort to disk storage...")
 		writeWait, _ := time.ParseDuration("10ms")
-		for tempdb.Writing == 1 || indexer.GravDBBackend.Writing == 1 {
-			if indexer.Closing {
+		for tempdb.Writing.Load() || indexer.GravDBBackend.Writing.Load() {
+			if indexer.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[AddSCIDToIndex-StoreAltDBInput] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
-		tempdb.Writing = 1
-		indexer.GravDBBackend.Writing = 1
+		tempdb.Writing.Store(true)
+		indexer.GravDBBackend.Writing.Store(true)
 		indexer.GravDBBackend.StoreAltDBInput(treenames, tempdb)
-		tempdb.Writing = 0
-		indexer.GravDBBackend.Writing = 0
+		tempdb.Writing.Store(false)
+		indexer.GravDBBackend.Writing.Store(false)
 		logger.Printf("[AddSCIDToIndex] Done - Committing RAM SCID sort to disk storage...")
 		logger.Printf("[AddSCIDToIndex] New stored disk: %v", len(indexer.GravDBBackend.GetAllOwnersAndSCIDs()))
 	case "boltdb":
@@ -1046,18 +1071,18 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 
 		logger.Printf("[AddSCIDToIndex] Starting - Committing RAM SCID sort to disk storage...")
 		writeWait, _ := time.ParseDuration("10ms")
-		for tempdb.Writing == 1 || indexer.BBSBackend.Writing == 1 {
-			if indexer.Closing {
+		for tempdb.Writing.Load() || indexer.BBSBackend.Writing.Load() {
+			if indexer.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[AddSCIDToIndex-StoreAltDBInput] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
-		tempdb.Writing = 1
-		indexer.BBSBackend.Writing = 1
+		tempdb.Writing.Store(true)
+		indexer.BBSBackend.Writing.Store(true)
 		indexer.BBSBackend.StoreAltDBInput(treenames, tempdb)
-		tempdb.Writing = 0
-		indexer.BBSBackend.Writing = 0
+		tempdb.Writing.Store(false)
+		indexer.BBSBackend.Writing.Store(false)
 		logger.Printf("[AddSCIDToIndex] Done - Committing RAM SCID sort to disk storage...")
 		logger.Printf("[AddSCIDToIndex] New stored disk: %v", len(indexer.BBSBackend.GetAllOwnersAndSCIDs()))
 	}
@@ -1071,7 +1096,7 @@ func (indexer *Indexer) indexBlock(blid string, topoheight int64) (blockTxns *st
 	var io rpc.GetBlock_Result
 	var ip = rpc.GetBlock_Params{Hash: blid}
 
-	if indexer.Closing {
+	if indexer.Closing.Load() {
 		return
 	}
 
@@ -1109,41 +1134,41 @@ func (indexer *Indexer) indexBlock(blid string, topoheight int64) (blockTxns *st
 
 		switch indexer.DBType {
 		case "gravdb":
-			for indexer.GravDBBackend.Writing == 1 {
-				if indexer.Closing {
+			for indexer.GravDBBackend.Writing.Load() {
+				if indexer.Closing.Load() {
 					return
 				}
 				//logger.Debugf("[Indexer-IndexBlock] GravitonDB is writing... sleeping for %v...", writeWait)
 				time.Sleep(writeWait)
 			}
 
-			indexer.GravDBBackend.Writing = 1
+			indexer.GravDBBackend.Writing.Store(true)
 			_, _, err = indexer.GravDBBackend.StoreIntegrators(addr.String(), false)
 			if err != nil {
 				logger.Errorf("[indexBlock] Error storing integrator details for blid %v", err)
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 				return blockTxns, err
 			}
-			indexer.GravDBBackend.Writing = 0
+			indexer.GravDBBackend.Writing.Store(false)
 		case "boltdb":
-			for indexer.BBSBackend.Writing == 1 {
-				if indexer.Closing {
+			for indexer.BBSBackend.Writing.Load() {
+				if indexer.Closing.Load() {
 					return
 				}
 				//logger.Debugf("[Indexer-IndexBlock] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 				time.Sleep(writeWait)
 			}
 
-			indexer.BBSBackend.Writing = 1
+			indexer.BBSBackend.Writing.Store(true)
 			//indexer.BBSBackend.Writer = "IndexBlock"
 			_, err = indexer.BBSBackend.StoreIntegrators(addr.String())
 			if err != nil {
 				logger.Errorf("[indexBlock] Error storing integrator details for blid %v", err)
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 				return blockTxns, err
 			}
-			indexer.BBSBackend.Writing = 0
+			indexer.BBSBackend.Writing.Store(false)
 			//indexer.BBSBackend.Writer = ""
 		}
 	}
@@ -1158,43 +1183,43 @@ func (indexer *Indexer) indexBlock(blid string, topoheight int64) (blockTxns *st
 		switch indexer.DBType {
 		case "gravdb":
 			if !(indexer.RunMode == "asset") {
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
 
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 				_, _, err2 = indexer.GravDBBackend.StoreMiniblockDetailsByHash(blid, mbldetails, false)
 				if err2 != nil {
 					logger.Errorf("[indexBlock] Error storing miniblock details for blid %v", err2)
-					indexer.GravDBBackend.Writing = 0
+					indexer.GravDBBackend.Writing.Store(false)
 					return blockTxns, err2
 				}
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 			}
 		case "boltdb":
 			if !(indexer.RunMode == "asset") {
-				for indexer.BBSBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.BBSBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-IndexBlock-StoreMiniblockDetailsByHash] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 					time.Sleep(writeWait)
 				}
 
-				indexer.BBSBackend.Writing = 1
+				indexer.BBSBackend.Writing.Store(true)
 				//indexer.BBSBackend.Writer = "IndexBlock"
 				_, err2 = indexer.BBSBackend.StoreMiniblockDetailsByHash(blid, mbldetails)
 				if err2 != nil {
 					logger.Errorf("[indexBlock] Error storing miniblock details for blid %v", err2)
-					indexer.BBSBackend.Writing = 0
+					indexer.BBSBackend.Writing.Store(false)
 					//indexer.BBSBackend.Writer = ""
 					return blockTxns, err2
 				}
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 			}
 		}
@@ -1214,7 +1239,13 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 
 	for i := 0; i < len(blTxns.Tx_hashes); i++ {
 		go func(i int) {
-			if indexer.Closing {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("[IndexTxn] PANIC recovered for tx index %d: %v", i, r)
+					wg.Done()
+				}
+			}()
+			if indexer.Closing.Load() {
 				wg.Done()
 				return
 			}
@@ -1332,30 +1363,30 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 								switch indexer.DBType {
 								case "gravdb":
 									if !(indexer.RunMode == "asset") {
-										for indexer.GravDBBackend.Writing == 1 {
-											if indexer.Closing {
+										for indexer.GravDBBackend.Writing.Load() {
+											if indexer.Closing.Load() {
 												return
 											}
 											//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 											time.Sleep(writeWait)
 										}
-										indexer.GravDBBackend.Writing = 1
+										indexer.GravDBBackend.Writing.Store(true)
 										indexer.GravDBBackend.StoreNormalTxWithSCIDByAddr(v, &structures.NormalTXWithSCIDParse{Txid: blTxns.Tx_hashes[i].String(), Scid: tx.Payloads[j].SCID.String(), Fees: sc_fees, Height: int64(blTxns.Topoheight)}, false)
-										indexer.GravDBBackend.Writing = 0
+										indexer.GravDBBackend.Writing.Store(false)
 									}
 								case "boltdb":
 									if !(indexer.RunMode == "asset") {
-										for indexer.BBSBackend.Writing == 1 {
-											if indexer.Closing {
+										for indexer.BBSBackend.Writing.Load() {
+											if indexer.Closing.Load() {
 												return
 											}
 											//logger.Debugf("[Indexer-IndexTxn-StoreNormalTxWithSCIDByAddr] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 											time.Sleep(writeWait)
 										}
-										indexer.BBSBackend.Writing = 1
+										indexer.BBSBackend.Writing.Store(true)
 										//indexer.BBSBackend.Writer = "IndexTxn"
 										indexer.BBSBackend.StoreNormalTxWithSCIDByAddr(v, &structures.NormalTXWithSCIDParse{Txid: blTxns.Tx_hashes[i].String(), Scid: tx.Payloads[j].SCID.String(), Fees: sc_fees, Height: int64(blTxns.Topoheight)})
-										indexer.BBSBackend.Writing = 0
+										indexer.BBSBackend.Writing.Store(false)
 										//indexer.BBSBackend.Writer = ""
 									}
 								}
@@ -1375,7 +1406,7 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 }
 
 func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normTxCount int64) (err error) {
-	if indexer.Closing {
+	if indexer.Closing.Load() {
 		return
 	}
 	var ctrees []*graviton.Tree
@@ -1383,33 +1414,33 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 	writeWait, _ := time.ParseDuration("20ms")
 	switch indexer.DBType {
 	case "gravdb":
-		for indexer.GravDBBackend.Writing == 1 {
-			if indexer.Closing {
+		for indexer.GravDBBackend.Writing.Load() {
+			if indexer.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
-		indexer.GravDBBackend.Writing = 1
+		indexer.GravDBBackend.Writing.Store(true)
 		if regTxCount > 0 && !indexer.FastSyncConfig.Enabled {
 			// Load from mem existing regTxCount and append new value
 			currRegTxCount := indexer.GravDBBackend.GetTxCount("registration")
 			/*
 				writeWait, _ := time.ParseDuration("50ms")
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-indexBlock-regTxCount] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 			*/
 			rtxtree, rtxchanges, err := indexer.GravDBBackend.StoreTxCount(regTxCount+currRegTxCount, "registration", true)
-			//indexer.GravDBBackend.Writing = 0
+			//indexer.GravDBBackend.Writing.Store(false)
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing registration tx count. DB '%v' - this block count '%v' - total '%v'", currRegTxCount, regTxCount, regTxCount+currRegTxCount)
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 				return err
 			} else {
 				if rtxchanges {
@@ -1423,26 +1454,26 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 			currBurnTxCount := indexer.GravDBBackend.GetTxCount("burn")
 			/*
 				writeWait, _ := time.ParseDuration("50ms")
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-indexBlock-burnTxCount] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 			*/
 			btxtree, btxchanges, err := indexer.GravDBBackend.StoreTxCount(burnTxCount+currBurnTxCount, "burn", true)
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing burn tx count. DB '%v' - this block count '%v' - total '%v'", currBurnTxCount, burnTxCount, regTxCount+currBurnTxCount)
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 				return err
 			} else {
 				if btxchanges {
 					ctrees = append(ctrees, btxtree)
 				}
 			}
-			//indexer.GravDBBackend.Writing = 0
+			//indexer.GravDBBackend.Writing.Store(false)
 		}
 
 		if normTxCount > 0 && !indexer.FastSyncConfig.Enabled {
@@ -1507,19 +1538,19 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 			currNormTxCount := indexer.GravDBBackend.GetTxCount("normal")
 			/*
 				writeWait, _ := time.ParseDuration("50ms")
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-indexBlock-normTxCount] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 			*/
 			ntxtree, ntxchanges, err := indexer.GravDBBackend.StoreTxCount(normTxCount+currNormTxCount, "normal", true)
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing normal tx count. DB '%v' - this block count '%v' - total '%v'", currNormTxCount, currNormTxCount, normTxCount+currNormTxCount)
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 				return err
 			} else {
 				if ntxchanges {
@@ -1535,16 +1566,16 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 				//logger.Debugf("[indexBlock-installsc] DEBUG - cv [%v]", cv)
 			}
 		}
-		indexer.GravDBBackend.Writing = 0
+		indexer.GravDBBackend.Writing.Store(false)
 	case "boltdb":
-		for indexer.BBSBackend.Writing == 1 {
-			if indexer.Closing {
+		for indexer.BBSBackend.Writing.Load() {
+			if indexer.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[Indexer-IndexTxCounts] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 			time.Sleep(writeWait)
 		}
-		indexer.BBSBackend.Writing = 1
+		indexer.BBSBackend.Writing.Store(true)
 		//indexer.BBSBackend.Writer = "IndexTxCounts"
 		if regTxCount > 0 && !indexer.FastSyncConfig.Enabled {
 			// Load from mem existing regTxCount and append new value
@@ -1552,7 +1583,7 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 			_, err := indexer.BBSBackend.StoreTxCount(regTxCount+currRegTxCount, "registration")
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing registration tx count. DB '%v' - this block count '%v' - total '%v'", currRegTxCount, regTxCount, regTxCount+currRegTxCount)
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 				return err
 			}
@@ -1564,7 +1595,7 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 			_, err := indexer.BBSBackend.StoreTxCount(burnTxCount+currBurnTxCount, "burn")
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing burn tx count. DB '%v' - this block count '%v' - total '%v'", currBurnTxCount, burnTxCount, regTxCount+currBurnTxCount)
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 				return err
 			}
@@ -1576,12 +1607,12 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 			_, err := indexer.BBSBackend.StoreTxCount(normTxCount+currNormTxCount, "normal")
 			if err != nil {
 				logger.Errorf("[indexBlock] ERROR - Error storing normal tx count. DB '%v' - this block count '%v' - total '%v'", currNormTxCount, currNormTxCount, normTxCount+currNormTxCount)
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 				return err
 			}
 		}
-		indexer.BBSBackend.Writing = 0
+		indexer.BBSBackend.Writing.Store(false)
 		//indexer.BBSBackend.Writer = ""
 	}
 
@@ -1590,7 +1621,7 @@ func (indexer *Indexer) indexTxCounts(regTxCount int64, burnTxCount int64, normT
 
 func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *structures.BlockTxns) (err error) {
 
-	if indexer.Closing {
+	if indexer.Closing.Load() {
 		return
 	}
 
@@ -1641,14 +1672,14 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 						writeWait, _ := time.ParseDuration("20ms")
 						switch indexer.DBType {
 						case "gravdb":
-							for indexer.GravDBBackend.Writing == 1 {
-								if indexer.Closing {
+							for indexer.GravDBBackend.Writing.Load() {
+								if indexer.Closing.Load() {
 									return
 								}
 								//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 								time.Sleep(writeWait)
 							}
-							indexer.GravDBBackend.Writing = 1
+							indexer.GravDBBackend.Writing.Store(true)
 							var ctrees []*graviton.Tree
 							sotree, sochanges, err := indexer.GravDBBackend.StoreOwner(bl_sctxs[i].Scid, bl_sctxs[i].Sender, true)
 							if err != nil {
@@ -1703,16 +1734,16 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 									//logger.Debugf("[indexInvokes-installsc] DEBUG - cv [%v]", cv)
 								}
 							}
-							indexer.GravDBBackend.Writing = 0
+							indexer.GravDBBackend.Writing.Store(false)
 						case "boltdb":
-							for indexer.BBSBackend.Writing == 1 {
-								if indexer.Closing {
+							for indexer.BBSBackend.Writing.Load() {
+								if indexer.Closing.Load() {
 									return
 								}
 								//logger.Debugf("[Indexer-IndexInvokes] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 								time.Sleep(writeWait)
 							}
-							indexer.BBSBackend.Writing = 1
+							indexer.BBSBackend.Writing.Store(true)
 							//indexer.BBSBackend.Writer = "IndexInvokes"
 
 							_, err := indexer.BBSBackend.StoreOwner(bl_sctxs[i].Scid, bl_sctxs[i].Sender)
@@ -1740,7 +1771,7 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 							if err != nil {
 								logger.Errorf("[indexInvokes-installsc] ERR - storing scid interaction height: %v", err)
 							}
-							indexer.BBSBackend.Writing = 0
+							indexer.BBSBackend.Writing.Store(false)
 							//indexer.BBSBackend.Writer = ""
 						}
 
@@ -1752,30 +1783,30 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 						switch indexer.DBType {
 						case "gravdb":
 							if !(indexer.RunMode == "asset") {
-								for indexer.GravDBBackend.Writing == 1 {
-									if indexer.Closing {
+								for indexer.GravDBBackend.Writing.Load() {
+									if indexer.Closing.Load() {
 										return
 									}
 									//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 									time.Sleep(writeWait)
 								}
-								indexer.GravDBBackend.Writing = 1
+								indexer.GravDBBackend.Writing.Store(true)
 								indexer.GravDBBackend.StoreInvalidSCIDDeploys(bl_sctxs[i].Scid, bl_sctxs[i].Fees, false)
-								indexer.GravDBBackend.Writing = 0
+								indexer.GravDBBackend.Writing.Store(false)
 							}
 						case "boltdb":
 							if !(indexer.RunMode == "asset") {
-								for indexer.BBSBackend.Writing == 1 {
-									if indexer.Closing {
+								for indexer.BBSBackend.Writing.Load() {
+									if indexer.Closing.Load() {
 										return
 									}
 									//logger.Debugf("[Indexer-IndexInvokes-StoreInvalidSCIDDeploys] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 									time.Sleep(writeWait)
 								}
-								indexer.BBSBackend.Writing = 1
+								indexer.BBSBackend.Writing.Store(true)
 								//indexer.BBSBackend.Writer = "IndexInvokes"
 								indexer.BBSBackend.StoreInvalidSCIDDeploys(bl_sctxs[i].Scid, bl_sctxs[i].Fees)
-								indexer.BBSBackend.Writing = 0
+								indexer.BBSBackend.Writing.Store(false)
 								//indexer.BBSBackend.Writer = ""
 							}
 						}
@@ -1799,15 +1830,15 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 						writeWait, _ := time.ParseDuration("20ms")
 						switch indexer.DBType {
 						case "gravdb":
-							for indexer.GravDBBackend.Writing == 1 {
-								if indexer.Closing {
+							for indexer.GravDBBackend.Writing.Load() {
+								if indexer.Closing.Load() {
 									return
 								}
 								//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 								time.Sleep(writeWait)
 							}
 							var ctrees []*graviton.Tree
-							indexer.GravDBBackend.Writing = 1
+							indexer.GravDBBackend.Writing.Store(true)
 							sotree, sochanges, err := indexer.GravDBBackend.StoreOwner(bl_sctxs[i].Scid, "", true)
 							if err != nil {
 								logger.Errorf("[indexInvokes] Error storing owner: %v", err)
@@ -1834,16 +1865,16 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 									//logger.Debugf("[indexInvokes-installsc] DEBUG - cv [%v]", cv)
 								}
 							}
-							indexer.GravDBBackend.Writing = 0
+							indexer.GravDBBackend.Writing.Store(false)
 						case "boltdb":
-							for indexer.BBSBackend.Writing == 1 {
-								if indexer.Closing {
+							for indexer.BBSBackend.Writing.Load() {
+								if indexer.Closing.Load() {
 									return
 								}
 								//logger.Debugf("[Indexer-IndexInvokes-StoreOwner] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 								time.Sleep(writeWait)
 							}
-							indexer.BBSBackend.Writing = 1
+							indexer.BBSBackend.Writing.Store(true)
 							//indexer.BBSBackend.Writer = "IndexInvokesOwnerStore"
 
 							_, err = indexer.BBSBackend.StoreOwner(bl_sctxs[i].Scid, "")
@@ -1856,7 +1887,7 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 								logger.Errorf("[indexInvokes] Error storing install height: %v", err)
 							}
 
-							indexer.BBSBackend.Writing = 0
+							indexer.BBSBackend.Writing.Store(false)
 							//indexer.BBSBackend.Writer = ""
 						}
 					}
@@ -1896,21 +1927,21 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 								scVars, scCode, _, _ = indexer.RPC.GetSCVariables(bl_sctxs[i].Scid, bl_txns.Topoheight, nil, nil, nil, false)
 								//}
 
-								for indexer.GravDBBackend.Writing == 1 {
-									if indexer.Closing {
+								for indexer.GravDBBackend.Writing.Load() {
+									if indexer.Closing.Load() {
 										return
 									}
 									//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 									time.Sleep(writeWait)
 								}
-								indexer.GravDBBackend.Writing = 1
+								indexer.GravDBBackend.Writing.Store(true)
 								var ctrees []*graviton.Tree
 
 								sidtree, sidchanges, err := indexer.GravDBBackend.StoreInvokeDetails(bl_sctxs[i].Scid, bl_sctxs[i].Sender, bl_sctxs[i].Entrypoint, bl_txns.Topoheight, &currsctx, true)
 								if err != nil {
 									logger.Errorf("[indexInvokes] Err storing invoke details. Err: %v", err)
 									time.Sleep(5 * time.Second)
-									indexer.GravDBBackend.Writing = 0
+									indexer.GravDBBackend.Writing.Store(false)
 									return err
 								} else {
 									if sidchanges {
@@ -1951,7 +1982,7 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 										//logger.Debugf("[indexInvokes] DEBUG - cv [%v]", cv)
 									}
 								}
-								indexer.GravDBBackend.Writing = 0
+								indexer.GravDBBackend.Writing.Store(false)
 							}
 						case "boltdb":
 							if !(indexer.RunMode == "asset") {
@@ -1976,21 +2007,21 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 								scVars, scCode, _, _ = indexer.RPC.GetSCVariables(bl_sctxs[i].Scid, bl_txns.Topoheight, nil, nil, nil, false)
 								//}
 
-								for indexer.BBSBackend.Writing == 1 {
-									if indexer.Closing {
+								for indexer.BBSBackend.Writing.Load() {
+									if indexer.Closing.Load() {
 										return
 									}
 									//logger.Debugf("[Indexer-IndexInvokes] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 									time.Sleep(writeWait)
 								}
-								indexer.BBSBackend.Writing = 1
+								indexer.BBSBackend.Writing.Store(true)
 								//indexer.BBSBackend.Writer = "IndexInvokesDetailsStore"
 
 								_, err := indexer.BBSBackend.StoreInvokeDetails(bl_sctxs[i].Scid, bl_sctxs[i].Sender, bl_sctxs[i].Entrypoint, bl_txns.Topoheight, &currsctx)
 								if err != nil {
 									logger.Errorf("[indexInvokes] Err storing invoke details. Err: %v", err)
 									time.Sleep(5 * time.Second)
-									indexer.BBSBackend.Writing = 0
+									indexer.BBSBackend.Writing.Store(false)
 									//indexer.BBSBackend.Writer = ""
 									return err
 								}
@@ -2011,7 +2042,7 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 									logger.Errorf("[indexInvokes] ERR - storing scid interaction height: %v", err)
 								}
 
-								indexer.BBSBackend.Writing = 0
+								indexer.BBSBackend.Writing.Store(false)
 								//indexer.BBSBackend.Writer = ""
 							}
 						}
@@ -2035,9 +2066,16 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 
 // Looped interval to probe DERO.GetInfo rpc call for updating chain topoheight. Also handles keeping connection to daemon via RPC.Connect() calls
 func (indexer *Indexer) getInfo() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Fatalf("[getInfo] PANIC recovered: %v", r)
+			indexer.Closing.Store(true)
+		}
+	}()
+
 	var reconnect_count int
 	for {
-		if indexer.Closing {
+		if indexer.Closing.Load() {
 			// Break out on closing call
 			break
 		}
@@ -2089,34 +2127,34 @@ func (indexer *Indexer) getInfo() {
 					writeWait, _ := time.ParseDuration("20ms")
 					switch indexer.DBType {
 					case "gravdb":
-						for indexer.GravDBBackend.Writing == 1 {
-							if indexer.Closing {
+						for indexer.GravDBBackend.Writing.Load() {
+							if indexer.Closing.Load() {
 								return
 							}
 							//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 							time.Sleep(writeWait)
 						}
-						indexer.GravDBBackend.Writing = 1
+						indexer.GravDBBackend.Writing.Store(true)
 						_, _, err := indexer.GravDBBackend.StoreGetInfoDetails(structureGetInfo, false)
 						if err != nil {
 							logger.Errorf("[getInfo] ERROR - GetInfo store failed: %v", err)
 						}
-						indexer.GravDBBackend.Writing = 0
+						indexer.GravDBBackend.Writing.Store(false)
 					case "boltdb":
-						for indexer.BBSBackend.Writing == 1 {
-							if indexer.Closing {
+						for indexer.BBSBackend.Writing.Load() {
+							if indexer.Closing.Load() {
 								return
 							}
 							//logger.Debugf("[Indexer-getinfo-StoreGetInfoDetails] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 							time.Sleep(writeWait)
 						}
-						indexer.BBSBackend.Writing = 1
+						indexer.BBSBackend.Writing.Store(true)
 						//indexer.BBSBackend.Writer = "getInfo"
 						_, err := indexer.BBSBackend.StoreGetInfoDetails(structureGetInfo)
 						if err != nil {
 							logger.Errorf("[getInfo] ERROR - GetInfo store failed: %v", err)
 						}
-						indexer.BBSBackend.Writing = 0
+						indexer.BBSBackend.Writing.Store(false)
 						//indexer.BBSBackend.Writer = ""
 					}
 				}
@@ -2142,34 +2180,34 @@ func (indexer *Indexer) getInfo() {
 			writeWait, _ := time.ParseDuration("20ms")
 			switch indexer.DBType {
 			case "gravdb":
-				for indexer.GravDBBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.GravDBBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 					time.Sleep(writeWait)
 				}
-				indexer.GravDBBackend.Writing = 1
+				indexer.GravDBBackend.Writing.Store(true)
 				_, _, err := indexer.GravDBBackend.StoreGetInfoDetails(structureGetInfo, false)
 				if err != nil {
 					logger.Errorf("[getInfo] ERROR - GetInfo store failed: %v", err)
 				}
-				indexer.GravDBBackend.Writing = 0
+				indexer.GravDBBackend.Writing.Store(false)
 			case "boltdb":
-				for indexer.BBSBackend.Writing == 1 {
-					if indexer.Closing {
+				for indexer.BBSBackend.Writing.Load() {
+					if indexer.Closing.Load() {
 						return
 					}
 					//logger.Debugf("[Indexer-getinfo-StoreGetInfoDetails] BoltDB is writing... sleeping for %v... writer %v...", writeWait, indexer.BBSBackend.Writer)
 					time.Sleep(writeWait)
 				}
-				indexer.BBSBackend.Writing = 1
+				indexer.BBSBackend.Writing.Store(true)
 				//indexer.BBSBackend.Writer = "getInfo"
 				_, err := indexer.BBSBackend.StoreGetInfoDetails(structureGetInfo)
 				if err != nil {
 					logger.Errorf("[getInfo] ERROR - GetInfo store failed: %v", err)
 				}
-				indexer.BBSBackend.Writing = 0
+				indexer.BBSBackend.Writing.Store(false)
 				//indexer.BBSBackend.Writer = ""
 			}
 		}
@@ -2183,8 +2221,15 @@ func (indexer *Indexer) getInfo() {
 
 // Looped interval to probe WALLET.GetHeight rpc call for updating wallet height
 func (indexer *Indexer) getWalletHeight() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Fatalf("[getWalletHeight] PANIC recovered: %v", r)
+			indexer.Closing.Store(true)
+		}
+	}()
+
 	for {
-		if indexer.Closing {
+		if indexer.Closing.Load() {
 			// Break out on closing call
 			break
 		}
@@ -3190,13 +3235,13 @@ func (indexer *Indexer) GetRandInteractionAddresses(count int64, config *structu
 // Close cleanly the indexer
 func (ind *Indexer) Close() {
 	// Tell indexer a closing operation is happening; this will close out loops on next iteration
-	ind.Closing = true
+	ind.Closing.Store(true)
 
 	switch ind.DBType {
 	case "gravdb":
-		ind.GravDBBackend.Closing = true
+		ind.GravDBBackend.Closing.Store(true)
 	case "boltdb":
-		ind.BBSBackend.Closing = true
+		ind.BBSBackend.Closing.Store(true)
 	}
 
 	// Sleep for safety
@@ -3211,29 +3256,29 @@ func (ind *Indexer) Close() {
 	writeWait, _ := time.ParseDuration("20ms")
 	switch ind.DBType {
 	case "gravdb":
-		for ind.GravDBBackend.Writing == 1 {
-			if ind.Closing {
+		for ind.GravDBBackend.Writing.Load() {
+			if ind.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
-		ind.GravDBBackend.Writing = 1
+		ind.GravDBBackend.Writing.Store(true)
 		ind.GravDBBackend.DB.Close()
-		ind.GravDBBackend.Writing = 0
+		ind.GravDBBackend.Writing.Store(false)
 	case "boltdb":
-		for ind.BBSBackend.Writing == 1 {
-			if ind.Closing {
+		for ind.BBSBackend.Writing.Load() {
+			if ind.Closing.Load() {
 				return
 			}
 			//logger.Debugf("[Indexer-Close] BoltDB is writing... sleeping for %v... writer %v...", writeWait, ind.BBSBackend.Writer)
 			time.Sleep(writeWait)
 		}
-		ind.BBSBackend.Writing = 1
+		ind.BBSBackend.Writing.Store(true)
 		//ind.BBSBackend.Writer = "Close"
 		ind.BBSBackend.DB.Sync()
 		ind.BBSBackend.DB.Close()
-		ind.BBSBackend.Writing = 0
+		ind.BBSBackend.Writing.Store(false)
 		//ind.BBSBackend.Writer = ""
 	}
 }
