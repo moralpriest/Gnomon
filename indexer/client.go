@@ -78,17 +78,17 @@ func (client *Client) Connect(endpoint string) (err error) {
 	// notify user of any state change
 	// if daemon connection breaks or comes live again
 	if err == nil {
-		if !Connected {
+		if !IsConnected() {
 			logger.Printf("[Connect] Connection to RPC server successful - %s", daemon_uri)
-			Connected = true
+			SetConnected(true)
 		}
 	} else {
 		logger.Errorf("[Connect] ERROR connecting to endpoint %v", err)
 
-		if Connected {
+		if IsConnected() {
 			logger.Errorf("[Connect] ERROR - Connection to RPC server Failed - %s", daemon_uri)
 		}
-		Connected = false
+		SetConnected(false)
 		return err
 	}
 
