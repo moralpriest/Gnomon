@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"sync/atomic"
@@ -14,6 +15,17 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
 )
+
+var scidRegex = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
+var addressRegex = regexp.MustCompile(`^[dero]{4}1[1-9A-HJ-NP-Za-km-z]{93}$`)
+
+func isValidSCID(scid string) bool {
+	return scidRegex.MatchString(scid)
+}
+
+func isValidAddress(address string) bool {
+	return addressRegex.MatchString(address)
+}
 
 type ApiServer struct {
 	Config        *structures.APIConfig
@@ -50,6 +62,11 @@ func (apiServer *ApiServer) Start() {
 	apiServer.collectStats()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[collectStats] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			select {
 			case <-statsTimer.C:
@@ -137,11 +154,11 @@ func notFound(writer http.ResponseWriter, _ *http.Request) {
 func (apiServer *ApiServer) collectStats() {
 	switch apiServer.DBType {
 	case "gravdb":
-		if apiServer.GravDBBackend.Closing {
+		if apiServer.GravDBBackend.Closing.Load() {
 			return
 		}
 	case "boltdb":
-		if apiServer.BBSBackend.Closing {
+		if apiServer.BBSBackend.Closing.Load() {
 			return
 		}
 	}
@@ -160,11 +177,11 @@ func (apiServer *ApiServer) collectStats() {
 	for k, _ := range sclist {
 		switch apiServer.DBType {
 		case "gravdb":
-			if apiServer.GravDBBackend.Closing {
+			if apiServer.GravDBBackend.Closing.Load() {
 				return
 			}
 		case "boltdb":
-			if apiServer.BBSBackend.Closing {
+			if apiServer.BBSBackend.Closing.Load() {
 				return
 			}
 		}
@@ -293,6 +310,11 @@ func (apiServer *ApiServer) InvokeIndexBySCID(writer http.ResponseWriter, r *htt
 		logger.Debugf("[API] URL Param 'scid' is missing. Debugging only.")
 	} else {
 		scid = scidkeys[0]
+		if !isValidSCID(scid) {
+			logger.Warnf("[API] Invalid SCID format: %s", scid)
+			http.Error(writer, "Invalid SCID format: must be 64 hex characters", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Query for address
@@ -302,6 +324,11 @@ func (apiServer *ApiServer) InvokeIndexBySCID(writer http.ResponseWriter, r *htt
 		logger.Debugf("[API] URL Param 'address' is missing.")
 	} else {
 		address = addresskeys[0]
+		if !isValidAddress(address) {
+			logger.Warnf("[API] Invalid address format: %s", address)
+			http.Error(writer, "Invalid address format", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Get all scid:owner
@@ -465,11 +492,21 @@ func (apiServer *ApiServer) InvokeSCVarsByHeight(writer http.ResponseWriter, r *
 		topoheight, err = strconv.ParseInt(height, 10, 64)
 		if err != nil {
 			logger.Errorf("[API] Err converting '%v' to int64 - %v", height, err)
-
 			err := json.NewEncoder(writer).Encode(reply)
 			if err != nil {
 				logger.Errorf("[API] Error serializing API response: %v", err)
 			}
+			return
+		}
+		if topoheight < 0 {
+			logger.Warnf("[API] Invalid topoheight (negative): %d", topoheight)
+			http.Error(writer, "Invalid topoheight: must be non-negative", http.StatusBadRequest)
+			return
+		}
+		if topoheight > 100_000_000 { // Sanity check - DERO chain is only ~3M blocks
+			logger.Warnf("[API] Invalid topoheight (too large): %d", topoheight)
+			http.Error(writer, "Invalid topoheight: value too large", http.StatusBadRequest)
+			return
 		}
 
 		switch apiServer.DBType {
