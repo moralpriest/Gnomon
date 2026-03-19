@@ -140,7 +140,10 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			// Break out on closing call
 			break
 		}
-		if indexer.ChainHeight == int64(0) {
+		indexer.RLock()
+		chainHeight := indexer.ChainHeight
+		indexer.RUnlock()
+		if chainHeight == int64(0) {
 			logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
 			time.Sleep(1 * time.Second)
 			continue
@@ -462,7 +465,12 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 				break
 			}
 
-			if indexer.LastIndexedHeight >= indexer.ChainHeight {
+			indexer.RLock()
+			lastIndexed := indexer.LastIndexedHeight
+			chainHeight := indexer.ChainHeight
+			indexer.RUnlock()
+
+			if lastIndexed >= chainHeight {
 				indexer.Status = "indexed"
 				time.Sleep(1 * time.Second)
 				continue
@@ -1274,18 +1282,18 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 
 			// TODO: Make this a consumable func with rpc calls and timeout / wait / retry logic for deduplication of code. Or use alternate method of checking [primary use case is remote nodes]
 			var reconnect_count int
+			var callErr error
 			for {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				err = indexer.RPC.RPC.CallResult(ctx, "DERO.GetTransaction", inputparam, &output)
+				callErr = indexer.RPC.RPC.CallResult(ctx, "DERO.GetTransaction", inputparam, &output)
 				cancel()
-				if err != nil {
-					logger.Debugf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . Trying again (%v / 5)", inputparam.Tx_Hashes, err, reconnect_count)
+				if callErr != nil {
+					logger.Debugf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . Trying again (%v / 5)", inputparam.Tx_Hashes, callErr, reconnect_count)
 					if reconnect_count >= 5 {
 						// TODO - In event indexer.Endpoint is being swapped, this case will fail and you could miss a txn. Need another handle rather than just "assume" skip/move on.
 						wg.Done()
 						// If we error, this could be due to regtxn not valid on pruned node or other reasons. We will just nil the err and then return and move on.
-						err = nil
-						logger.Errorf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . (%v / 5 times)", inputparam.Tx_Hashes, err, reconnect_count)
+						logger.Errorf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . (%v / 5 times)", inputparam.Tx_Hashes, callErr, reconnect_count)
 						return
 					}
 					time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff

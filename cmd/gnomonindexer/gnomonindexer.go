@@ -457,13 +457,19 @@ func main() {
 
 			gnomon_count := int64(len(validatedSCIDs))
 
+			defaultIndexer.RLock()
 			currheight := defaultIndexer.LastIndexedHeight
+			defaultIndexer.RUnlock()
+
+			defaultIndexer.RLock()
+			chainHeight := defaultIndexer.ChainHeight
+			defaultIndexer.RUnlock()
 
 			// choose color based on urgency
 			color := "\033[32m" // default is green color
-			if currheight < defaultIndexer.ChainHeight {
+			if currheight < chainHeight {
 				color = "\033[33m" // make prompt yellow
-			} else if currheight > defaultIndexer.ChainHeight {
+			} else if currheight > chainHeight {
 				color = "\033[31m" // make prompt red
 			}
 
@@ -472,7 +478,11 @@ func main() {
 				gcolor = "\033[33m" // make prompt yellow
 			}
 
-			RLI.SetPrompt(fmt.Sprintf("\033[1m\033[32mGNOMON \033[0m"+color+"[%d/%d] "+gcolor+"R:%d G:%d >>\033[0m ", currheight, defaultIndexer.ChainHeight, gnomon_count, len(Gnomon.Indexers)))
+			defaultIndexer.RLock()
+			chainHeightForPrompt := defaultIndexer.ChainHeight
+			defaultIndexer.RUnlock()
+
+			RLI.SetPrompt(fmt.Sprintf("\033[1m\033[32mGNOMON \033[0m"+color+"[%d/%d] "+gcolor+"R:%d G:%d >>\033[0m ", currheight, chainHeightForPrompt, gnomon_count, len(Gnomon.Indexers)))
 			RLI.Refresh()
 			time.Sleep(3 * time.Second)
 		}
