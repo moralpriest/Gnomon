@@ -50,6 +50,11 @@ func (apiServer *ApiServer) Start() {
 	apiServer.collectStats()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[collectStats] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			select {
 			case <-statsTimer.C:
@@ -137,11 +142,11 @@ func notFound(writer http.ResponseWriter, _ *http.Request) {
 func (apiServer *ApiServer) collectStats() {
 	switch apiServer.DBType {
 	case "gravdb":
-		if apiServer.GravDBBackend.Closing {
+		if apiServer.GravDBBackend.Closing.Load() {
 			return
 		}
 	case "boltdb":
-		if apiServer.BBSBackend.Closing {
+		if apiServer.BBSBackend.Closing.Load() {
 			return
 		}
 	}
@@ -160,11 +165,11 @@ func (apiServer *ApiServer) collectStats() {
 	for k, _ := range sclist {
 		switch apiServer.DBType {
 		case "gravdb":
-			if apiServer.GravDBBackend.Closing {
+			if apiServer.GravDBBackend.Closing.Load() {
 				return
 			}
 		case "boltdb":
-			if apiServer.BBSBackend.Closing {
+			if apiServer.BBSBackend.Closing.Load() {
 				return
 			}
 		}
