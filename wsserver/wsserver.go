@@ -71,8 +71,10 @@ func ListenWS(bindAddr string, indexer *indexer.Indexer) {
 		var err error
 
 		logger.Printf("[wshandler] %v", w.Header())
+		// SECURITY: OriginPatterns is commented out which allows any origin.
+		// For production, configure allowed origins via environment variable or config.
 		conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-			//OriginPatterns: []string{"127.0.0.1:9090", "127.0.0.1:8080"},
+			//OriginPatterns: []string{"localhost", "127.0.0.1"}, // Restrict to local connections for security
 		})
 		if err != nil {
 			logger.Errorf("[wshandler] Err on connection being established. %v", err)
