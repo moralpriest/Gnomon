@@ -406,6 +406,11 @@ func main() {
 	Gnomon.Indexers[csearch_filter] = defaultIndexer
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[readline_loop] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			if err = Gnomon.readline_loop(RLI); err == nil {
 				break
@@ -415,6 +420,11 @@ func main() {
 
 	// This tiny goroutine continuously updates status as required
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[status_update] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			select {
 			case <-Exit_In_Progress:

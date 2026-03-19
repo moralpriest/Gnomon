@@ -447,6 +447,12 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	logger.Printf("[StartDaemonMode] Set number of parallel blocks to index to '%d'. Starting index routine...", blockParallelNum)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Fatalf("[StartDaemonMode] PANIC recovered: %v", r)
+				indexer.Closing.Store(true)
+			}
+		}()
 		k := 0
 		for {
 			if indexer.Closing.Load() {
@@ -760,6 +766,12 @@ func (indexer *Indexer) StartWalletMode(runType string) {
 		time.Sleep(1 * time.Second)
 
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Fatalf("[StartWalletMode] PANIC recovered: %v", r)
+					indexer.Closing.Store(true)
+				}
+			}()
 			for {
 				if indexer.Closing.Load() {
 					// Break out on closing call
@@ -1227,6 +1239,12 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 
 	for i := 0; i < len(blTxns.Tx_hashes); i++ {
 		go func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Errorf("[IndexTxn] PANIC recovered for tx index %d: %v", i, r)
+					wg.Done()
+				}
+			}()
 			if indexer.Closing.Load() {
 				wg.Done()
 				return
@@ -2048,6 +2066,13 @@ func (indexer *Indexer) indexInvokes(bl_sctxs []structures.SCTXParse, bl_txns *s
 
 // Looped interval to probe DERO.GetInfo rpc call for updating chain topoheight. Also handles keeping connection to daemon via RPC.Connect() calls
 func (indexer *Indexer) getInfo() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Fatalf("[getInfo] PANIC recovered: %v", r)
+			indexer.Closing.Store(true)
+		}
+	}()
+
 	var reconnect_count int
 	for {
 		if indexer.Closing.Load() {
@@ -2196,6 +2221,13 @@ func (indexer *Indexer) getInfo() {
 
 // Looped interval to probe WALLET.GetHeight rpc call for updating wallet height
 func (indexer *Indexer) getWalletHeight() {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Fatalf("[getWalletHeight] PANIC recovered: %v", r)
+			indexer.Closing.Store(true)
+		}
+	}()
+
 	for {
 		if indexer.Closing.Load() {
 			// Break out on closing call

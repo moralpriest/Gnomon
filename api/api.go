@@ -50,6 +50,11 @@ func (apiServer *ApiServer) Start() {
 	apiServer.collectStats()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[collectStats] PANIC recovered: %v", r)
+			}
+		}()
 		for {
 			select {
 			case <-statsTimer.C:
