@@ -18,7 +18,7 @@ import (
 )
 
 var scidRegex = regexp.MustCompile(`^[a-fA-F0-9]{64}$`)
-var addressRegex = regexp.MustCompile(`^[dero]{4}1[1-9A-HJ-NP-Za-km-z]{93}$`)
+var addressRegex = regexp.MustCompile(`^[a-z]{2,4}1[a-zA-Z0-9]{40,}$`)
 
 func isValidSCID(scid string) bool {
 	return scidRegex.MatchString(scid)
