@@ -276,7 +276,6 @@ func (apiServer *ApiServer) StatsIndex(writer http.ResponseWriter, _ *http.Reque
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -303,7 +302,6 @@ func (apiServer *ApiServer) InvokeIndexBySCID(writer http.ResponseWriter, r *htt
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -457,7 +455,6 @@ func (apiServer *ApiServer) InvokeSCVarsByHeight(writer http.ResponseWriter, r *
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -634,7 +631,6 @@ func (apiServer *ApiServer) NormalTxWithSCID(writer http.ResponseWriter, r *http
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -720,7 +716,6 @@ func (apiServer *ApiServer) InvalidSCIDStats(writer http.ResponseWriter, _ *http
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 	invalidscids := make(map[string]uint64)
@@ -756,7 +751,6 @@ func (apiServer *ApiServer) MBLLookupByHash(writer http.ResponseWriter, r *http.
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -820,7 +814,6 @@ func (apiServer *ApiServer) MBLLookupByAddr(writer http.ResponseWriter, r *http.
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -871,7 +864,6 @@ func (apiServer *ApiServer) MBLLookupAll(writer http.ResponseWriter, r *http.Req
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
@@ -955,7 +947,6 @@ func (apiServer *ApiServer) GetInfo(writer http.ResponseWriter, _ *http.Request)
 	writer.Header().Set("Content-Type", "application/json; charset=UTF-8")
 	writer.Header().Set("Access-Control-Allow-Origin", "*")
 	writer.Header().Set("Cache-Control", "no-cache")
-	writer.WriteHeader(http.StatusOK)
 
 	reply := make(map[string]interface{})
 
