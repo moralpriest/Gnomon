@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -34,6 +35,8 @@ type ApiServer struct {
 	GravDBBackend *store.GravitonStore
 	BBSBackend    *store.BboltStore
 	DBType        string
+	shutdown      chan struct{}
+	wg            sync.WaitGroup
 }
 
 // local logger
@@ -54,6 +57,7 @@ func NewApiServer(cfg *structures.APIConfig, gravdbbackend *store.GravitonStore,
 
 // Starts the api server
 func (apiServer *ApiServer) Start() {
+	apiServer.shutdown = make(chan struct{})
 
 	apiServer.StatsIntv, _ = time.ParseDuration(apiServer.Config.StatsCollectInterval)
 	statsTimer := time.NewTimer(apiServer.StatsIntv)
@@ -61,7 +65,9 @@ func (apiServer *ApiServer) Start() {
 
 	apiServer.collectStats()
 
+	apiServer.wg.Add(1)
 	go func() {
+		defer apiServer.wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Errorf("[collectStats] PANIC recovered: %v", r)
@@ -72,6 +78,9 @@ func (apiServer *ApiServer) Start() {
 			case <-statsTimer.C:
 				apiServer.collectStats()
 				statsTimer.Reset(apiServer.StatsIntv)
+			case <-apiServer.shutdown:
+				statsTimer.Stop()
+				return
 			}
 		}
 	}()
@@ -84,6 +93,14 @@ func (apiServer *ApiServer) Start() {
 	} else {
 		apiServer.listen()
 	}
+}
+
+// Shutdown gracefully shuts down the API server
+func (apiServer *ApiServer) Shutdown() {
+	logger.Printf("[API] Shutting down...")
+	close(apiServer.shutdown)
+	apiServer.wg.Wait()
+	logger.Printf("[API] Shutdown complete")
 }
 
 // Sets up the non-SSL API listener

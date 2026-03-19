@@ -7,12 +7,14 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -123,6 +125,15 @@ func main() {
 	// setup logging
 	indexer.InitLog(arguments, RLI.Stdout())
 	logger = structures.Logger.WithFields(logrus.Fields{})
+
+	// Handle SIGINT/SIGTERM gracefully
+	go func() {
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+		<-sigChan
+		logger.Printf("[Main] Received shutdown signal, initiating graceful shutdown...")
+		Gnomon.Close()
+	}()
 
 	// Set variables from arguments
 	gnomondb_wd, err := os.Getwd()
