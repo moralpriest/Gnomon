@@ -35,6 +35,10 @@ var thAddition int64
 var gnomonIndexes []*structures.GnomonSCIDQuery
 var mux sync.Mutex
 
+var gnomonHTTPClient = &http.Client{
+	Timeout: 10 * time.Second,
+}
+
 var command_line string = `Gnomon
 Gnomon SC Index Registration Service: As the Gnomon SCID owner, you can automatically poll your local gnomon instance for new SCIDs to append to the index SC
 
@@ -188,7 +192,7 @@ func fetchGnomonIndexes(gnomonendpoint string) {
 	var lastQuery map[string]interface{}
 	var err error
 	logger.Printf("[fetchGnomonIndexes] Getting sc data")
-	rs, err := http.Get("http://" + gnomonendpoint + "/api/indexedscs")
+	rs, err := gnomonHTTPClient.Get("http://" + gnomonendpoint + "/api/indexedscs")
 	if err != nil {
 		logger.Errorf("[fetchGnomonIndexes] gnomon query err %s", err)
 	} else {
@@ -230,7 +234,7 @@ func runGnomonIndexer(derodendpoint string, gnomonendpoint string, search_filter
 	// Get current height from getinfo api to poll current network states. Fallback to slow and steady mode.
 	var defaultIndexer *indexer.Indexer
 	logger.Printf("[fetchGnomonIndexes] Getting current height data")
-	rs, err := http.Get("http://" + gnomonendpoint + "/api/getinfo")
+	rs, err := gnomonHTTPClient.Get("http://" + gnomonendpoint + "/api/getinfo")
 	if err != nil {
 		logger.Errorf("[fetchGnomonIndexes] gnomon height query err %s", err)
 	} else {
@@ -560,7 +564,7 @@ func indexcleanup(derodendpoint string, gnomonendpoint string, sf_scid_exclusion
 	// Get current height from getinfo api to poll current network states. Fallback to slow and steady mode.
 	var defaultIndexer *indexer.Indexer
 	logger.Printf("[fetchGnomonIndexes] Getting current height data")
-	rs, err := http.Get("http://" + gnomonendpoint + "/api/getinfo")
+	rs, err := gnomonHTTPClient.Get("http://" + gnomonendpoint + "/api/getinfo")
 	if err != nil {
 		logger.Errorf("[fetchGnomonIndexes] gnomon height query err %s", err)
 	} else {

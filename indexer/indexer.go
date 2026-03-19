@@ -1103,12 +1103,15 @@ func (indexer *Indexer) indexBlock(blid string, topoheight int64) (blockTxns *st
 	// TODO: Make this a consumable func with rpc calls and timeout / wait / retry logic for deduplication of code. Or use alternate method of checking [primary use case is remote nodes]
 	var reconnect_count int
 	for {
-		if err = indexer.RPC.RPC.CallResult(context.Background(), "DERO.GetBlock", ip, &io); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = indexer.RPC.RPC.CallResult(ctx, "DERO.GetBlock", ip, &io)
+		cancel()
+		if err != nil {
 			logger.Debugf("[indexBlock] ERROR - GetBlock failed: %v . Trying again (%v / 5) ", err, reconnect_count)
 			if reconnect_count >= 5 {
 				return blockTxns, fmt.Errorf("[indexBlock] ERROR - GetBlock failed: %v", err)
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
 
 			reconnect_count++
 
@@ -1272,7 +1275,10 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 			// TODO: Make this a consumable func with rpc calls and timeout / wait / retry logic for deduplication of code. Or use alternate method of checking [primary use case is remote nodes]
 			var reconnect_count int
 			for {
-				if err = indexer.RPC.RPC.CallResult(context.Background(), "DERO.GetTransaction", inputparam, &output); err != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				err = indexer.RPC.RPC.CallResult(ctx, "DERO.GetTransaction", inputparam, &output)
+				cancel()
+				if err != nil {
 					logger.Debugf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . Trying again (%v / 5)", inputparam.Tx_Hashes, err, reconnect_count)
 					if reconnect_count >= 5 {
 						// TODO - In event indexer.Endpoint is being swapped, this case will fail and you could miss a txn. Need another handle rather than just "assume" skip/move on.
@@ -1282,7 +1288,7 @@ func (indexer *Indexer) IndexTxn(blTxns *structures.BlockTxns, noStore bool) (bl
 						logger.Errorf("[IndexTxn] ERROR - GetTransaction for txid '%v' failed: %v . (%v / 5 times)", inputparam.Tx_Hashes, err, reconnect_count)
 						return
 					}
-					time.Sleep(1 * time.Second)
+					time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
 
 					reconnect_count++
 
@@ -2087,7 +2093,10 @@ func (indexer *Indexer) getInfo() {
 		var info *structures.GetInfo
 
 		// collect all the data afresh,  execute rpc to service
-		if err = indexer.RPC.RPC.CallResult(context.Background(), "DERO.GetInfo", nil, &info); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = indexer.RPC.RPC.CallResult(ctx, "DERO.GetInfo", nil, &info)
+		cancel()
+		if err != nil {
 			logger.Debugf("[getInfo] ERROR - GetInfo failed: %v . Trying again (%v / 5)", err, reconnect_count)
 
 			// TODO: Perhaps just a .Closing = true call here and then gnomonserver can be polling for any indexers with .Closing then close the rest cleanly. If packaged, then just have to handle themselves w/ .Close()
@@ -2096,8 +2105,8 @@ func (indexer *Indexer) getInfo() {
 				logger.Errorf("[getInfo] ERROR - GetInfo failed: %v . (%v / 5 times)", err, reconnect_count)
 				break
 			}
-			time.Sleep(1 * time.Second)
-			indexer.RPC.Connect(indexer.Endpoint) // Attempt to re-connect now
+			time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
+			indexer.RPC.Connect(indexer.Endpoint)                       // Attempt to re-connect now
 
 			reconnect_count++
 
@@ -2238,7 +2247,10 @@ func (indexer *Indexer) getWalletHeight() {
 		var info rpc.GetHeight_Result
 
 		// collect all the data afresh,  execute rpc to service
-		if err = indexer.RPC.RPC.CallResult(context.Background(), "WALLET.GetHeight", nil, &info); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		err = indexer.RPC.RPC.CallResult(ctx, "WALLET.GetHeight", nil, &info)
+		cancel()
+		if err != nil {
 			logger.Errorf("[getWalletHeight] ERROR - GetHeight failed: %v", err)
 			time.Sleep(1 * time.Second)
 			indexer.RPC.Connect(indexer.Endpoint) // Attempt to re-connect now

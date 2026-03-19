@@ -27,6 +27,12 @@ type Client struct {
 	sync.RWMutex
 }
 
+const defaultRPCTimeout = 30 * time.Second
+
+func rpcContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), defaultRPCTimeout)
+}
+
 func (client *Client) Connect(endpoint string) (err error) {
 	logger = structures.Logger.WithFields(logrus.Fields{})
 
@@ -36,7 +42,9 @@ func (client *Client) Connect(endpoint string) (err error) {
 	if client.WS != nil {
 		remAddr := client.WS.RemoteAddr()
 		var pingpong string
-		err2 := client.RPC.CallResult(context.Background(), "DERO.Ping", nil, &pingpong)
+		ctx, cancel := rpcContext()
+		defer cancel()
+		err2 := client.RPC.CallResult(ctx, "DERO.Ping", nil, &pingpong)
 		if strings.Contains(remAddr.String(), endpoint) && err2 == nil {
 			// Endpoint is the same, continue on
 			return
@@ -109,7 +117,10 @@ func (client *Client) getBlockHash(height uint64) (hash string, err error) {
 		var io rpc.GetBlockHeaderByHeight_Result
 		var ip = rpc.GetBlockHeaderByTopoHeight_Params{TopoHeight: height}
 
-		if err = client.RPC.CallResult(context.Background(), "DERO.GetBlockHeaderByTopoHeight", ip, &io); err != nil {
+		ctx, cancel := rpcContext()
+		err = client.RPC.CallResult(ctx, "DERO.GetBlockHeaderByTopoHeight", ip, &io)
+		cancel()
+		if err != nil {
 			logger.Debugf("[getBlockHash] %v - GetBlockHeaderByTopoHeight failed: %v . Trying again (%v / 5)", height, err, reconnect_count)
 			//return hash, fmt.Errorf("GetBlockHeaderByTopoHeight failed: %v", err)
 
@@ -118,7 +129,7 @@ func (client *Client) getBlockHash(height uint64) (hash string, err error) {
 				logger.Errorf("[getBlockHash] %v - GetBlockHeaderByTopoHeight failed: %v . (%v / 5 times)", height, err, reconnect_count)
 				break
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
 
 			reconnect_count++
 
@@ -145,12 +156,15 @@ func (client *Client) GetTxPool() (txlist []string, err error) {
 
 		var io rpc.GetTxPool_Result
 
-		if err = client.RPC.CallResult(context.Background(), "DERO.GetTxPool", nil, &io); err != nil {
+		ctx, cancel := rpcContext()
+		err = client.RPC.CallResult(ctx, "DERO.GetTxPool", nil, &io)
+		cancel()
+		if err != nil {
 			if reconnect_count >= 5 {
 				logger.Errorf("[getTxPool] GetTxPool failed: %v . (%v / 5 times)", err, reconnect_count)
 				break
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
 
 			reconnect_count++
 
@@ -184,7 +198,10 @@ func (client *Client) GetSCVariables(scid string, topoheight int64, keysuint64 [
 	// TODO: Make this a consumable func with rpc calls and timeout / wait / retry logic for deduplication of code. Or use alternate method of checking [primary use case is remote nodes]
 	var reconnect_count int
 	for {
-		if err = client.RPC.CallResult(context.Background(), "DERO.GetSC", getSCParams, &getSCResults); err != nil {
+		ctx, cancel := rpcContext()
+		err = client.RPC.CallResult(ctx, "DERO.GetSC", getSCParams, &getSCResults)
+		cancel()
+		if err != nil {
 			// Catch for v139 daemons that reject >1024 var returns and we need to be specific (if defined, otherwise we'll err out after 5 tries)
 			if strings.Contains(err.Error(), "max 1024 variables can be returned") || strings.Contains(err.Error(), "namesc cannot request all variables") {
 				if keysuint64 != nil || keysstring != nil || keysbytes != nil {
@@ -200,7 +217,7 @@ func (client *Client) GetSCVariables(scid string, topoheight int64, keysuint64 [
 				logger.Errorf("[GetSCVariables] ERROR - GetSCVariables failed for '%v': %v . (%v / 5 times)", scid, err, reconnect_count)
 				return variables, code, balances, err
 			}
-			time.Sleep(1 * time.Second)
+			time.Sleep(time.Duration(1<<reconnect_count) * time.Second) // exponential backoff
 
 			reconnect_count++
 
