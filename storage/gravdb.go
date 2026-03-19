@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/civilware/Gnomon/structures"
@@ -17,11 +19,12 @@ type GravitonStore struct {
 	DB            *graviton.Store
 	DBPath        string
 	DBTrees       []string
-	migrating     int
+	mu            sync.Mutex
+	migrating     atomic.Bool
 	DBMaxSnapshot uint64
 	DBMigrateWait time.Duration
-	Writing       int
-	Closing       bool
+	Writing       atomic.Bool
+	Closing       atomic.Bool
 }
 
 type TreeKV struct {
@@ -80,7 +83,7 @@ func (g *GravitonStore) StoreLastIndexHeight(last_indexedheight int64, nocommit 
 	topoheight := strconv.FormatInt(last_indexedheight, 10)
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreLastIndexHeight] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -126,7 +129,7 @@ func (g *GravitonStore) GetLastIndexHeight() (topoheight int64, err error) {
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetLastIndexHeight] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -178,7 +181,7 @@ func (g *GravitonStore) StoreTxCount(count int64, txType string, nocommit bool) 
 	txCount := strconv.FormatInt(count, 10)
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreTxCount] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -226,7 +229,7 @@ func (g *GravitonStore) GetTxCount(txType string) int64 {
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetTxCount] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -278,7 +281,7 @@ func (g *GravitonStore) StoreOwner(scid string, owner string, nocommit bool) (tr
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreOwner] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -324,7 +327,7 @@ func (g *GravitonStore) GetOwner(scid string) string {
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetOwner] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -405,7 +408,7 @@ func (g *GravitonStore) StoreInstallHeight(scid string, height int64, nocommit b
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreInstallHeight] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -454,7 +457,7 @@ func (g *GravitonStore) GetInstallHeight(scid string) (iHeight int64) {
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetInstallHeight] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -541,7 +544,7 @@ func (g *GravitonStore) StoreNormalTxWithSCIDByAddr(addr string, normTxWithSCID 
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreNormalTxWithSCIDByAddr] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -710,7 +713,7 @@ func (g *GravitonStore) StoreInvokeDetails(scid string, signer string, entrypoin
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreInvokeDetails] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -775,7 +778,7 @@ func (g *GravitonStore) StoreSCIDInstallSCDetails(scid string, invokedetails *st
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreSCIDInstallSCDetails] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -822,7 +825,7 @@ func (g *GravitonStore) GetSCIDInstallSCDetails(scid string) (invokedetails *str
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetSCIDInstallSCDetails] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -995,7 +998,7 @@ func (g *GravitonStore) StoreGetInfoDetails(getinfo *structures.GetInfo, nocommi
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreGetInfoDetails] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1082,7 +1085,7 @@ func (g *GravitonStore) StoreSCIDVariableDetails(scid string, variables []*struc
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreSCIDVariableDetails] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1577,7 +1580,7 @@ func (g *GravitonStore) StoreSCIDInteractionHeight(scid string, height int64, no
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreSCIDInteractionHeight] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1712,7 +1715,7 @@ func (g *GravitonStore) StoreInvalidSCIDDeploys(scid string, fee uint64, nocommi
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreInvalidSCIDDeploys] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1828,7 +1831,7 @@ func (g *GravitonStore) StoreMiniblockDetailsByHash(blid string, mbldetails []*s
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreMiniblockDetailsByHash] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1909,7 +1912,7 @@ func (g *GravitonStore) GetMiniblockDetailsByHash(blid string) (miniblocks []*st
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetMiniblockDetailsByHash] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -1965,7 +1968,7 @@ func (g *GravitonStore) StoreMiniblockCountByAddress(addr string, nocommit bool)
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreMiniblockCountByAddress] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -2012,7 +2015,7 @@ func (g *GravitonStore) GetMiniblockCountByAddress(addr string) (miniblocks int6
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetMiniblockDetailsByHash] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -2081,7 +2084,7 @@ func (g *GravitonStore) GetSCIDInteractionByAddr(addr string) (scids []string) {
 // Commits multiple trees and returns the commit version and errs
 func (g *GravitonStore) CommitTrees(trees []*graviton.Tree) (cv uint64, err error) {
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetMiniblockDetailsByHash] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 	}
@@ -2101,7 +2104,7 @@ func (g *GravitonStore) StoreAltDBInput(treenames []string, altdb *GravitonStore
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreAltDBInput] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		/*
@@ -2179,7 +2182,7 @@ func (g *GravitonStore) StoreIntegrators(integrator string, nocommit bool) (tree
 	}
 
 	// Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[StoreIntegrators] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB
@@ -2245,7 +2248,7 @@ func (g *GravitonStore) GetIntegrators() (integrators map[string]int64, err erro
 	}
 
 	// Swap DB at g.DBMaxSnapshot+ commits. Check for g.migrating, if so sleep for g.DBMigrateWait ms
-	for g.migrating == 1 {
+	for g.migrating.Load() {
 		logger.Debugf("[GetIntegrators] G is migrating... sleeping for %v...", g.DBMigrateWait)
 		time.Sleep(g.DBMigrateWait)
 		store = g.DB

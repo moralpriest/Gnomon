@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/chzyer/readline"
@@ -33,7 +34,7 @@ type GnomonServer struct {
 	LastIndexedHeight int64
 	SearchFilters     []string
 	Indexers          map[string]*indexer.Indexer
-	Closing           bool
+	Closing           atomic.Bool
 	DaemonEndpoint    string
 	RunMode           string
 	DBType            string
@@ -421,7 +422,7 @@ func main() {
 				return
 			default:
 			}
-			if Gnomon.Closing {
+			if Gnomon.Closing.Load() {
 				return
 			}
 
@@ -1764,7 +1765,7 @@ func scidExist(s []string, str string) bool {
 }
 
 func (g *GnomonServer) Close() {
-	g.Closing = true
+	g.Closing.Store(true)
 
 	for _, v := range g.Indexers {
 		go v.Close()
