@@ -201,6 +201,17 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			indexer.ValidatedSCs = append(indexer.ValidatedSCs, k)
 			indexer.Unlock()
 		}
+
+		switch indexer.DBType {
+		case "gravdb":
+			if err := storage.BackfillTelaMetadata(indexer.GravDBBackend); err != nil {
+				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
+			}
+		case "boltdb":
+			if err := storage.BackfillTelaMetadata(indexer.BBSBackend); err != nil {
+				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
+			}
+		}
 	}
 
 	for _, vi := range structures.Hardcoded_SCIDS {
@@ -549,6 +560,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 												time.Sleep(writeWait)
 											}
 											indexer.GravDBBackend.Writing.Store(true)
+											indexer.PruneDerivedDataAbove(rewindIndex)
 											indexer.GravDBBackend.StoreLastIndexHeight(rewindIndex, false)
 											indexer.GravDBBackend.Writing.Store(false)
 										case "boltdb":
@@ -561,6 +573,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 											}
 											indexer.BBSBackend.Writing.Store(true)
 											//indexer.BBSBackend.Writer = "StartDaemonMode"
+											indexer.PruneDerivedDataAbove(rewindIndex)
 											indexer.BBSBackend.StoreLastIndexHeight(rewindIndex)
 											indexer.BBSBackend.Writing.Store(false)
 											//indexer.BBSBackend.Writer = ""
