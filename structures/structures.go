@@ -93,6 +93,40 @@ type BlockTxns struct {
 
 type GetInfo rpc.GetInfo_Result
 
+type ChangedSCIDs_Result struct {
+	Topoheight int64    `json:"topoheight"`
+	SCIDs      []string `json:"scids"`
+	Count      int      `json:"count"`
+}
+
+type TelaChanged_Result struct {
+	Topoheight int64    `json:"topoheight"`
+	SCIDs      []string `json:"scids"`
+	Count      int      `json:"count"`
+	Filter     string   `json:"filter"`
+}
+
+type TelaMetadata struct {
+	SCID        string `json:"scid"`
+	Code        string `json:"code,omitempty"`
+	DURL        string `json:"durl,omitempty"`
+	NameHdr     string `json:"nameHdr,omitempty"`
+	DescrHdr    string `json:"descrHdr,omitempty"`
+	IconHdr     string `json:"iconHdr,omitempty"`
+	DocType     string `json:"docType,omitempty"`
+	DocCount    int    `json:"docCount,omitempty"`
+	IsTelaIndex bool   `json:"isTelaIndex"`
+	Topoheight  int64  `json:"topoheight"`
+}
+
+type TelaMetadata_Result struct {
+	Topoheight int64          `json:"topoheight"`
+	Results    []TelaMetadata `json:"results"`
+	Count      int            `json:"count"`
+	Offset     int            `json:"offset,omitempty"`
+	Limit      int            `json:"limit,omitempty"`
+}
+
 type JSONRpcReq struct {
 	Id     *json.RawMessage `json:"id"`
 	Method string           `json:"method"`
@@ -185,6 +219,36 @@ type (
 
 	WS_ListSCByHeight_Result struct {
 		ListSCByHeight []GnomonSCIDQuery `json:"listscbyheight"`
+	}
+)
+
+type (
+	WS_ChangedSCIDs_Params struct {
+		Height int64  `json:"height"`
+		Filter string `json:"filter,omitempty"`
+	}
+
+	WS_ChangedSCIDs_Result struct {
+		Topoheight int64    `json:"topoheight"`
+		SCIDs      []string `json:"scids"`
+		Count      int      `json:"count"`
+		Filter     string   `json:"filter,omitempty"`
+	}
+)
+
+type (
+	WS_TelaMetadata_Params struct {
+		Height int64 `json:"height,omitempty"`
+		Limit  int   `json:"limit,omitempty"`
+		Offset int   `json:"offset,omitempty"`
+	}
+
+	WS_TelaMetadata_Result struct {
+		Topoheight int64          `json:"topoheight"`
+		Results    []TelaMetadata `json:"results"`
+		Count      int            `json:"count"`
+		Offset     int            `json:"offset,omitempty"`
+		Limit      int            `json:"limit,omitempty"`
 	}
 )
 

@@ -394,6 +394,12 @@ func (g *GravitonStore) StoreInstallHeight(scid string, height int64, nocommit b
 			return tree, changes, cerr
 		}
 	}
+
+	if err == nil && changes {
+		if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
+			return tree, changes, jerr
+		}
+	}
 	return tree, changes, nil
 }
 
@@ -683,6 +689,12 @@ func (g *GravitonStore) StoreInvokeDetails(scid string, signer string, entrypoin
 			return tree, changes, cerr
 		}
 	}
+
+	if err == nil && changes {
+		if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
+			return tree, changes, jerr
+		}
+	}
 	return tree, changes, nil
 }
 
@@ -724,6 +736,12 @@ func (g *GravitonStore) StoreSCIDInstallSCDetails(scid string, invokedetails *st
 		if cerr != nil {
 			logger.Errorf("[Graviton] ERROR: %v", cerr)
 			return tree, changes, cerr
+		}
+	}
+
+	if err == nil && changes && invokedetails != nil {
+		if jerr := g.StoreSCIDChange(scid, invokedetails.Height); jerr != nil {
+			return tree, changes, jerr
 		}
 	}
 	return tree, changes, nil
@@ -1005,6 +1023,12 @@ func (g *GravitonStore) StoreSCIDVariableDetails(scid string, variables []*struc
 		if cerr != nil {
 			logger.Errorf("[Graviton] ERROR: %v", cerr)
 			return tree, changes, cerr
+		}
+	}
+
+	if err == nil && changes {
+		if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
+			return tree, changes, jerr
 		}
 	}
 	return tree, changes, nil
@@ -1519,6 +1543,12 @@ func (g *GravitonStore) StoreSCIDInteractionHeight(scid string, height int64, no
 			return tree, changes, cerr
 		}
 	}
+
+	if err == nil && changes {
+		if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
+			return tree, changes, jerr
+		}
+	}
 	return tree, changes, nil
 }
 
@@ -1581,6 +1611,220 @@ func (g *GravitonStore) GetInteractionIndex(topoheight int64, heights []int64, r
 	}
 
 	return height
+}
+
+func (g *GravitonStore) StoreSCIDChange(scid string, topoheight int64) error {
+	if scid == "" || topoheight < 0 {
+		return nil
+	}
+
+	g.waitForMigration()
+
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+
+	tree, _ := ss.GetTree(scidChangeJournalBucket)
+	if tree == nil {
+		var terr error
+		logger.Errorf("[Graviton-StoreSCIDChange] ERROR: Tree is nil for '%v'. Attempting to rollback 1 snapshot", scidChangeJournalBucket)
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, terr = prevss.GetTree(scidChangeJournalBucket)
+		if tree == nil {
+			return terr
+		}
+	}
+
+	key := strconv.FormatInt(topoheight, 10)
+	current, err := tree.Get([]byte(key))
+	var scids []string
+	if err == nil && current != nil {
+		_ = json.Unmarshal(current, &scids)
+		for _, existing := range scids {
+			if existing == scid {
+				return nil
+			}
+		}
+	}
+
+	scids = append(scids, scid)
+	sort.Strings(scids)
+	encoded, err := json.Marshal(scids)
+	if err != nil {
+		return fmt.Errorf("[Graviton] could not marshal scid change journal: %v", err)
+	}
+
+	tree.Put([]byte(key), encoded)
+	_, cerr := graviton.Commit(tree)
+	if cerr != nil {
+		logger.Errorf("[Graviton] ERROR: %v", cerr)
+		return cerr
+	}
+
+	return nil
+}
+
+func (g *GravitonStore) GetSCIDChangesAtTopoheight(topoheight int64) (scids []string) {
+	g.waitForMigration()
+
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil
+	}
+
+	tree, _ := ss.GetTree(scidChangeJournalBucket)
+	if tree == nil {
+		var terr error
+		logger.Errorf("[Graviton-GetSCIDChangesAtTopoheight] ERROR: Tree is nil for '%v'. Attempting to rollback 1 snapshot", scidChangeJournalBucket)
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return nil
+		}
+		tree, terr = prevss.GetTree(scidChangeJournalBucket)
+		if tree == nil {
+			logger.Errorf("[Graviton] ERROR: %v", terr)
+			return nil
+		}
+	}
+
+	v, _ := tree.Get([]byte(strconv.FormatInt(topoheight, 10)))
+	if v != nil {
+		_ = json.Unmarshal(v, &scids)
+	}
+
+	return scids
+}
+
+func (g *GravitonStore) GetSCIDChangesSince(topoheight int64) (scids []string) {
+	g.waitForMigration()
+
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil
+	}
+
+	tree, _ := ss.GetTree(scidChangeJournalBucket)
+	if tree == nil {
+		var terr error
+		logger.Errorf("[Graviton-GetSCIDChangesSince] ERROR: Tree is nil for '%v'. Attempting to rollback 1 snapshot", scidChangeJournalBucket)
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return nil
+		}
+		tree, terr = prevss.GetTree(scidChangeJournalBucket)
+		if tree == nil {
+			logger.Errorf("[Graviton] ERROR: %v", terr)
+			return nil
+		}
+	}
+
+	combined := make(map[string]struct{})
+	c := tree.Cursor()
+	for k, v, err := c.First(); err == nil; k, v, err = c.Next() {
+		height, parseErr := strconv.ParseInt(string(k), 10, 64)
+		if parseErr != nil || height <= topoheight {
+			continue
+		}
+
+		var curr []string
+		_ = json.Unmarshal(v, &curr)
+		for _, scid := range curr {
+			combined[scid] = struct{}{}
+		}
+	}
+
+	return sortedSCIDSet(combined)
+}
+
+func (g *GravitonStore) DeleteSCIDChange(scid string, topoheight int64) error {
+	if scid == "" || topoheight < 0 {
+		return nil
+	}
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+	tree, _ := ss.GetTree(scidChangeJournalBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, _ = prevss.GetTree(scidChangeJournalBucket)
+		if tree == nil {
+			return nil
+		}
+	}
+	key := strconv.FormatInt(topoheight, 10)
+	v, _ := tree.Get([]byte(key))
+	if v == nil {
+		return nil
+	}
+	var scids []string
+	_ = json.Unmarshal(v, &scids)
+	filtered := make([]string, 0, len(scids))
+	for _, curr := range scids {
+		if curr != scid {
+			filtered = append(filtered, curr)
+		}
+	}
+	if len(filtered) == 0 {
+		if err := tree.Delete([]byte(key)); err != nil {
+			return err
+		}
+	} else {
+		encoded, err := json.Marshal(filtered)
+		if err != nil {
+			return err
+		}
+		tree.Put([]byte(key), encoded)
+	}
+	_, cerr := graviton.Commit(tree)
+	return cerr
+}
+
+func (g *GravitonStore) DeleteSCIDChangesAbove(topoheight int64) error {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+	tree, _ := ss.GetTree(scidChangeJournalBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, _ = prevss.GetTree(scidChangeJournalBucket)
+		if tree == nil {
+			return nil
+		}
+	}
+	c := tree.Cursor()
+	var keys [][]byte
+	for k, _, err := c.First(); err == nil && k != nil; k, _, err = c.Next() {
+		height, parseErr := strconv.ParseInt(string(k), 10, 64)
+		if parseErr == nil && height > topoheight {
+			keys = append(keys, append([]byte(nil), k...))
+		}
+	}
+	for _, key := range keys {
+		if err := tree.Delete(key); err != nil {
+			return err
+		}
+	}
+	_, cerr := graviton.Commit(tree)
+	return cerr
 }
 
 // Stores any SCIDs that were attempted to be deployed but not correct - log scid/fees burnt attempting it.

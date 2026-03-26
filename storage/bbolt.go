@@ -227,6 +227,12 @@ func (bbs *BboltStore) StoreInstallHeight(scid string, height int64) (changes bo
 		return
 	})
 
+	if err == nil && changes {
+		if jerr := bbs.StoreSCIDChange(scid, height); jerr != nil {
+			return changes, jerr
+		}
+	}
+
 	return
 }
 
@@ -421,6 +427,12 @@ func (bbs *BboltStore) StoreInvokeDetails(scid string, signer string, entrypoint
 		return
 	})
 
+	if err == nil && changes {
+		if jerr := bbs.StoreSCIDChange(scid, topoheight); jerr != nil {
+			return changes, jerr
+		}
+	}
+
 	return
 }
 
@@ -444,6 +456,12 @@ func (bbs *BboltStore) StoreSCIDInstallSCDetails(scid string, invokedetails *str
 		changes = true
 		return
 	})
+
+	if err == nil && changes && invokedetails != nil {
+		if jerr := bbs.StoreSCIDChange(scid, invokedetails.Height); jerr != nil {
+			return changes, jerr
+		}
+	}
 
 	return
 }
@@ -637,6 +655,15 @@ func (bbs *BboltStore) StoreSCIDVariableDetails(scid string, variables []*struct
 		changes = true
 		return
 	})
+
+	if err == nil && changes {
+		if jerr := bbs.StoreSCIDChange(scid, topoheight); jerr != nil {
+			return changes, jerr
+		}
+		if jerr := UpsertTelaMetadataFromVariables(bbs, scid, topoheight, variables); jerr != nil {
+			return changes, jerr
+		}
+	}
 
 	return
 }
@@ -1139,6 +1166,12 @@ func (bbs *BboltStore) StoreSCIDInteractionHeight(scid string, height int64) (ch
 		return
 	})
 
+	if err == nil && changes {
+		if jerr := bbs.StoreSCIDChange(scid, height); jerr != nil {
+			return changes, jerr
+		}
+	}
+
 	return
 }
 
@@ -1185,6 +1218,156 @@ func (bbs *BboltStore) GetInteractionIndex(topoheight int64, heights []int64, rm
 	}
 
 	return height
+}
+
+func (bbs *BboltStore) StoreSCIDChange(scid string, topoheight int64) (err error) {
+	if scid == "" || topoheight < 0 {
+		return nil
+	}
+
+	var curr []byte
+	var scids []string
+	key := strconv.FormatInt(topoheight, 10)
+
+	err = bbs.DB.View(func(tx *bolt.Tx) (err error) {
+		b := tx.Bucket([]byte(scidChangeJournalBucket))
+		if b != nil {
+			curr = b.Get([]byte(key))
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	err = bbs.DB.Update(func(tx *bolt.Tx) (err error) {
+		b, err := tx.CreateBucketIfNotExists([]byte(scidChangeJournalBucket))
+		if err != nil {
+			return fmt.Errorf("bucket: %s", err)
+		}
+
+		if curr != nil {
+			_ = json.Unmarshal(curr, &scids)
+			for _, existing := range scids {
+				if existing == scid {
+					return nil
+				}
+			}
+		}
+
+		scids = append(scids, scid)
+		sort.Strings(scids)
+
+		encoded, err := json.Marshal(scids)
+		if err != nil {
+			return fmt.Errorf("[BBolt] could not marshal scid change journal: %v", err)
+		}
+
+		return b.Put([]byte(key), encoded)
+	})
+
+	return err
+}
+
+func (bbs *BboltStore) GetSCIDChangesAtTopoheight(topoheight int64) (scids []string) {
+	key := strconv.FormatInt(topoheight, 10)
+
+	bbs.DB.View(func(tx *bolt.Tx) (err error) {
+		b := tx.Bucket([]byte(scidChangeJournalBucket))
+		if b != nil {
+			v := b.Get([]byte(key))
+			if v != nil {
+				_ = json.Unmarshal(v, &scids)
+			}
+		}
+		return nil
+	})
+
+	return scids
+}
+
+func (bbs *BboltStore) GetSCIDChangesSince(topoheight int64) (scids []string) {
+	combined := make(map[string]struct{})
+
+	bbs.DB.View(func(tx *bolt.Tx) (err error) {
+		b := tx.Bucket([]byte(scidChangeJournalBucket))
+		if b == nil {
+			return nil
+		}
+
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			height, parseErr := strconv.ParseInt(string(k), 10, 64)
+			if parseErr != nil || height <= topoheight {
+				continue
+			}
+
+			var curr []string
+			_ = json.Unmarshal(v, &curr)
+			for _, scid := range curr {
+				combined[scid] = struct{}{}
+			}
+		}
+		return nil
+	})
+
+	return sortedSCIDSet(combined)
+}
+
+func (bbs *BboltStore) DeleteSCIDChange(scid string, topoheight int64) error {
+	if scid == "" || topoheight < 0 {
+		return nil
+	}
+	key := strconv.FormatInt(topoheight, 10)
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(scidChangeJournalBucket))
+		if b == nil {
+			return nil
+		}
+		v := b.Get([]byte(key))
+		if v == nil {
+			return nil
+		}
+		var scids []string
+		_ = json.Unmarshal(v, &scids)
+		filtered := make([]string, 0, len(scids))
+		for _, curr := range scids {
+			if curr != scid {
+				filtered = append(filtered, curr)
+			}
+		}
+		if len(filtered) == 0 {
+			return b.Delete([]byte(key))
+		}
+		encoded, err := json.Marshal(filtered)
+		if err != nil {
+			return err
+		}
+		return b.Put([]byte(key), encoded)
+	})
+}
+
+func (bbs *BboltStore) DeleteSCIDChangesAbove(topoheight int64) error {
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(scidChangeJournalBucket))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		var keys [][]byte
+		for k, _ := c.First(); k != nil; k, _ = c.Next() {
+			height, err := strconv.ParseInt(string(k), 10, 64)
+			if err == nil && height > topoheight {
+				keys = append(keys, append([]byte(nil), k...))
+			}
+		}
+		for _, key := range keys {
+			if err := b.Delete(key); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // Stores any SCIDs that were attempted to be deployed but not correct - log scid/fees burnt attempting it.

@@ -308,6 +308,60 @@ func (wss *WSServer) wsHandleClient(ctx context.Context, c *websocket.Conn, l *r
 			logger.Debugf("[wsHandleClient] Server disconnect request")
 			return fmt.Errorf("server disconnect request")
 		}
+	case "changedscids":
+		var params structures.WS_ChangedSCIDs_Params
+		pb, err := req.Params.MarshalJSON()
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+		}
+		err = json.Unmarshal(pb, &params)
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+			return err
+		}
+
+		lh, _ := ChangedSCIDs(ctx, params, wss.Indexer)
+		message := &structures.JSONRpcResp{Id: req.Id, Version: "2.0", Error: nil, Result: lh}
+		err = wsjson.Write(ctx, c, message)
+		if err != nil {
+			return fmt.Errorf("server disconnect request")
+		}
+	case "telachanged":
+		var params structures.WS_ChangedSCIDs_Params
+		pb, err := req.Params.MarshalJSON()
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+		}
+		err = json.Unmarshal(pb, &params)
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+			return err
+		}
+
+		lh, _ := ChangedTela(ctx, params, wss.Indexer)
+		message := &structures.JSONRpcResp{Id: req.Id, Version: "2.0", Error: nil, Result: lh}
+		err = wsjson.Write(ctx, c, message)
+		if err != nil {
+			return fmt.Errorf("server disconnect request")
+		}
+	case "telametadata":
+		var params structures.WS_TelaMetadata_Params
+		pb, err := req.Params.MarshalJSON()
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+		}
+		err = json.Unmarshal(pb, &params)
+		if err != nil {
+			logger.Errorf("[wsHandleClient] Unable to parse params")
+			return err
+		}
+
+		lh, _ := TelaMetadata(ctx, params, wss.Indexer)
+		message := &structures.JSONRpcResp{Id: req.Id, Version: "2.0", Error: nil, Result: lh}
+		err = wsjson.Write(ctx, c, message)
+		if err != nil {
+			return fmt.Errorf("server disconnect request")
+		}
 	default:
 		logger.Debugf("[wsHandleClient] Server disconnect request - invalid request method (%s)", req.Method)
 		// Sleep rate limit time for response

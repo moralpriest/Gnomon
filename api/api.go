@@ -112,6 +112,10 @@ func (apiServer *ApiServer) listen() {
 	router.HandleFunc("/api/scvarsbyheight", apiServer.InvokeSCVarsByHeight)
 	router.HandleFunc("/api/invalidscids", apiServer.InvalidSCIDStats)
 	router.HandleFunc("/api/scidprivtx", apiServer.NormalTxWithSCID)
+	router.HandleFunc("/api/changedscids", apiServer.ChangedSCIDsSince)
+	router.HandleFunc("/api/telachanged", apiServer.ChangedTelaSCIDsSince)
+	router.HandleFunc("/api/telametadata", apiServer.TelaMetadataSince)
+	router.HandleFunc("/api/tela", apiServer.TelaMetadataAll)
 	if apiServer.Config.MBLLookup {
 		router.HandleFunc("/api/getmbladdrsbyhash", apiServer.MBLLookupByHash)
 		router.HandleFunc("/api/getmblcountbyaddr", apiServer.MBLLookupByAddr)
@@ -134,6 +138,10 @@ func (apiServer *ApiServer) listenSSL() {
 	routerSSL.HandleFunc("/api/scvarsbyheight", apiServer.InvokeSCVarsByHeight)
 	routerSSL.HandleFunc("/api/invalidscids", apiServer.InvalidSCIDStats)
 	routerSSL.HandleFunc("/api/scidprivtx", apiServer.NormalTxWithSCID)
+	routerSSL.HandleFunc("/api/changedscids", apiServer.ChangedSCIDsSince)
+	routerSSL.HandleFunc("/api/telachanged", apiServer.ChangedTelaSCIDsSince)
+	routerSSL.HandleFunc("/api/telametadata", apiServer.TelaMetadataSince)
+	routerSSL.HandleFunc("/api/tela", apiServer.TelaMetadataAll)
 	if apiServer.Config.MBLLookup {
 		routerSSL.HandleFunc("/api/getmbladdrsbyhash", apiServer.MBLLookupByHash)
 		routerSSL.HandleFunc("/api/getmblcountbyaddr", apiServer.MBLLookupByAddr)
