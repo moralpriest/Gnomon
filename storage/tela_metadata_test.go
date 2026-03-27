@@ -143,6 +143,40 @@ func TestDeriveTelaMetadata_BootstrapArtifactKind(t *testing.T) {
 	}
 }
 
+func TestDeriveTelaMetadata_DisplayNameFromHTMLTitle(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-title", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: `Function InitializePrivate() Uint64
+10 RETURN 0
+End Function
+/*<!DOCTYPE HTML><html><head><title>Hello from Azylem</title></head></html>*/`},
+		{Key: "dURL", Value: "azylem.self.tela"},
+		{Key: "docType", Value: "TELA-HTML-1"},
+	})
+
+	if meta == nil || meta.DisplayName != "Hello from Azylem" {
+		t.Fatalf("expected displayName from HTML title, got %#v", meta)
+	}
+}
+
+func TestDeriveTelaMetadata_PopulatesHeadersFromCode(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-codehdr", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: `Function InitializePrivate() Uint64
+10 STORE("nameHdr", "Ghost Exchange")
+20 STORE("descrHdr", "Phantom powered finance")
+30 STORE("iconURLHdr", "https://example/icon.svg")
+40 STORE("dURL", "ghost.trading.tela")
+50 STORE("telaVersion", "1.1.0")
+60 RETURN 0
+End Function`},
+		{Key: "dURL", Value: "ghost.trading.tela"},
+		{Key: "telaVersion", Value: "1.1.0"},
+	})
+
+	if meta == nil || meta.NameHdr != "Ghost Exchange" || meta.DescrHdr != "Phantom powered finance" || meta.IconHdr != "https://example/icon.svg" {
+		t.Fatalf("expected headers to populate from code, got %#v", meta)
+	}
+}
+
 func TestDeriveTelaMetadata_DocArtifactKind(t *testing.T) {
 	meta := DeriveTelaMetadata("scid-doc", 10, []*structures.SCIDVariable{
 		{Key: "C", Value: "TELA INDEX"},

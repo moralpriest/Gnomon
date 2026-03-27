@@ -49,3 +49,45 @@ func TestIndexerGetAllTelaMetadata(t *testing.T) {
 		t.Fatalf("unexpected all tela metadata result: %#v", result)
 	}
 }
+
+func TestPreferTopLevelTelaMetadata(t *testing.T) {
+	results := []structures.TelaMetadata{
+		{SCID: "scid-doc", DURL: "1.2.0.example-app.tela", DisplayName: "1.2.0.example-app.tela", ArtifactKind: "doc", IsTelaIndex: true},
+		{SCID: "scid-index", DURL: "example-app.tela", NameHdr: "Example Exchange", DisplayName: "Example Exchange", ArtifactKind: "index", DescrHdr: "Trading app", IconHdr: "https://example/icon.png", IsTelaIndex: true},
+	}
+
+	idx := &Indexer{}
+	filtered := idx.preferTopLevelTelaMetadata(results)
+	if len(filtered) != 1 || filtered[0].SCID != "scid-index" {
+		t.Fatalf("unexpected top-level preferred metadata: %#v", filtered)
+	}
+}
+
+func TestPreferTopLevelTelaMetadata_PrefersHeaderBearingDocSibling(t *testing.T) {
+	results := []structures.TelaMetadata{
+		{SCID: "scid-index-file", DURL: "index.example.self.tela", DisplayName: "index.example.self.tela", ArtifactKind: "doc", IsTelaIndex: true},
+		{SCID: "scid-app", DURL: "example.self.tela", NameHdr: "Hello from Example", DisplayName: "Hello from Example", ArtifactKind: "doc", DescrHdr: "self post", IconHdr: "https://example/icon.png", IsTelaIndex: true},
+	}
+
+	idx := &Indexer{}
+	filtered := idx.preferTopLevelTelaMetadata(results)
+	if len(filtered) != 1 || filtered[0].SCID != "scid-app" {
+		t.Fatalf("unexpected preferred doc sibling metadata: %#v", filtered)
+	}
+}
+
+func TestPreferTopLevelTelaMetadata_PromotesSiblingFields(t *testing.T) {
+	results := []structures.TelaMetadata{
+		{SCID: "scid-top", DURL: "example.self.tela", DisplayName: "example.self.tela", ArtifactKind: "index", IsTelaIndex: true},
+		{SCID: "scid-doc", DURL: "example.self.tela", NameHdr: "Hello from Example", DisplayName: "Hello from Example", ArtifactKind: "doc", DescrHdr: "self post", IconHdr: "https://example/icon.png", IsTelaIndex: true},
+	}
+
+	idx := &Indexer{}
+	filtered := idx.preferTopLevelTelaMetadata(results)
+	if len(filtered) != 1 {
+		t.Fatalf("unexpected filtered metadata: %#v", filtered)
+	}
+	if filtered[0].DisplayName != "Hello from Example" || filtered[0].DescrHdr != "self post" || filtered[0].IconHdr == "" {
+		t.Fatalf("expected sibling field promotion, got %#v", filtered[0])
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,7 @@ type TelaMetadataVariableStore interface {
 	TelaMetadataStore
 	GetAllOwnersAndSCIDs() map[string]string
 	GetAllSCIDsAndInstallHeights() map[string]int64
+	GetAllSCIDVariableDetails(scid string) []*structures.SCIDVariable
 	GetSCIDVariableDetailsAtTopoheight(scid string, topoheight int64) []*structures.SCIDVariable
 	GetSCIDInteractionHeight(scid string) []int64
 	GetInteractionIndex(topoheight int64, heights []int64, rmax bool) int64
@@ -71,6 +73,10 @@ func DeriveTelaMetadata(scid string, topoheight int64, variables []*structures.S
 				meta.DescrHdr = v
 			}
 		case "IconHdr":
+			if v, ok := variable.Value.(string); ok {
+				meta.IconHdr = v
+			}
+		case "iconURLHdr":
 			if v, ok := variable.Value.(string); ok {
 				meta.IconHdr = v
 			}
@@ -130,6 +136,8 @@ func DeriveTelaMetadata(scid string, topoheight int64, variables []*structures.S
 		meta.IsTelaIndex = true
 	}
 
+	populateTelaHeadersFromCode(meta)
+
 	meta.DisplayName = deriveTelaDisplayName(meta)
 	meta.ArtifactKind = deriveTelaArtifactKind(meta)
 
@@ -149,11 +157,76 @@ func deriveTelaDisplayName(meta *structures.TelaMetadata) string {
 		return name
 	}
 
+	if descr := strings.TrimSpace(meta.DescrHdr); descr != "" && !isTechnicalDisplayName(descr) && len(descr) <= 80 {
+		return descr
+	}
+
+	if title := deriveTitleFromCode(meta.Code); title != "" {
+		return title
+	}
+
 	if durl := strings.TrimSpace(meta.DURL); durl != "" {
 		return durl
 	}
 
 	return ""
+}
+
+var htmlTitlePattern = regexp.MustCompile(`(?is)<title>\s*(.*?)\s*</title>`)
+var (
+	nameHdrCodePattern    = regexp.MustCompile(`STORE\("nameHdr",\s*"([^"]*)"\)`)
+	descrHdrCodePattern   = regexp.MustCompile(`STORE\("descrHdr",\s*"([^"]*)"\)`)
+	iconURLHdrCodePattern = regexp.MustCompile(`STORE\("iconURLHdr",\s*"([^"]*)"\)`)
+)
+
+func populateTelaHeadersFromCode(meta *structures.TelaMetadata) {
+	if meta == nil || meta.Code == "" {
+		return
+	}
+	if strings.TrimSpace(meta.NameHdr) == "" {
+		if m := nameHdrCodePattern.FindStringSubmatch(meta.Code); len(m) > 1 {
+			meta.NameHdr = m[1]
+		}
+	}
+	if strings.TrimSpace(meta.DescrHdr) == "" {
+		if m := descrHdrCodePattern.FindStringSubmatch(meta.Code); len(m) > 1 {
+			meta.DescrHdr = m[1]
+		}
+	}
+	if strings.TrimSpace(meta.IconHdr) == "" {
+		if m := iconURLHdrCodePattern.FindStringSubmatch(meta.Code); len(m) > 1 {
+			meta.IconHdr = m[1]
+		}
+	}
+}
+
+func deriveTitleFromCode(code string) string {
+	if code == "" {
+		return ""
+	}
+	matches := htmlTitlePattern.FindStringSubmatch(code)
+	if len(matches) < 2 {
+		return ""
+	}
+	title := strings.TrimSpace(matches[1])
+	if isTechnicalDisplayName(title) {
+		return ""
+	}
+	return title
+}
+
+func isTechnicalDisplayName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return true
+	}
+	if ext := strings.ToLower(filepath.Ext(name)); ext != "" {
+		switch ext {
+		case ".js", ".css", ".json", ".wasm", ".gz", ".png", ".jpg", ".jpeg", ".svg", ".webp", ".ico", ".html":
+			return true
+		}
+	}
+	return strings.Contains(name, ".tela") || strings.Contains(name, "script") || strings.Contains(name, "bundle") || strings.Contains(name, "runtime")
 }
 
 func deriveTelaArtifactKind(meta *structures.TelaMetadata) string {
