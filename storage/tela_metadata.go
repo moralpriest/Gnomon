@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -78,16 +79,20 @@ func DeriveTelaMetadata(scid string, topoheight int64, variables []*structures.S
 			}
 		case "telaVersion":
 			meta.IsTelaIndex = true
+		case "docType":
+			if v, ok := variable.Value.(string); ok {
+				meta.DocType = v
+			}
 		case "DOC", "DOC1":
 			meta.DocCount++
 			if meta.DocType == "" {
-				meta.DocType = key
+				meta.DocType = "doc"
 			}
 		default:
 			if strings.HasPrefix(key, "DOC") {
 				meta.DocCount++
 				if meta.DocType == "" {
-					meta.DocType = key
+					meta.DocType = "doc"
 				}
 			}
 			if strings.EqualFold(key, "name") && meta.NameHdr == "" {
@@ -124,11 +129,91 @@ func DeriveTelaMetadata(scid string, topoheight int64, variables []*structures.S
 		meta.IsTelaIndex = true
 	}
 
+	meta.DisplayName = deriveTelaDisplayName(meta)
+	meta.ArtifactKind = deriveTelaArtifactKind(meta)
+
 	if !meta.IsTelaIndex && meta.DURL == "" && meta.NameHdr == "" && meta.DescrHdr == "" && meta.IconHdr == "" && meta.DocCount == 0 {
 		return nil
 	}
 
 	return meta
+}
+
+func deriveTelaDisplayName(meta *structures.TelaMetadata) string {
+	if meta == nil {
+		return ""
+	}
+
+	if name := strings.TrimSpace(meta.NameHdr); name != "" {
+		return name
+	}
+
+	if durl := strings.TrimSpace(meta.DURL); durl != "" {
+		return durl
+	}
+
+	return ""
+}
+
+func deriveTelaArtifactKind(meta *structures.TelaMetadata) string {
+	if meta == nil {
+		return ""
+	}
+
+	durl := strings.ToLower(strings.TrimSpace(meta.DURL))
+	name := strings.ToLower(strings.TrimSpace(meta.NameHdr))
+	display := strings.ToLower(strings.TrimSpace(meta.DisplayName))
+	docType := strings.ToLower(strings.TrimSpace(meta.DocType))
+	code := strings.ToLower(meta.Code)
+	hasUserFacingMetadata := strings.TrimSpace(meta.NameHdr) != "" || strings.TrimSpace(meta.DescrHdr) != "" || strings.TrimSpace(meta.IconHdr) != ""
+
+	hasAny := func(s string, terms ...string) bool {
+		for _, term := range terms {
+			if strings.Contains(s, term) {
+				return true
+			}
+		}
+		return false
+	}
+
+	assetLike := func(s string) bool {
+		ext := strings.ToLower(filepath.Ext(s))
+		switch ext {
+		case ".js", ".css", ".json", ".wasm", ".gz", ".png", ".jpg", ".jpeg", ".svg", ".webp", ".ico":
+			return true
+		default:
+			return false
+		}
+	}
+
+	if strings.HasSuffix(durl, ".tela.shard") || hasAny(durl, "docshard", "doc-shard") {
+		return "docshards"
+	}
+
+	if hasAny(durl, "bootstrap") || hasAny(name, "bootstrap") || hasAny(display, "bootstrap") || hasAny(code, "bootstrap") {
+		return "bootstrap"
+	}
+
+	if assetLike(durl) || assetLike(name) || assetLike(display) ||
+		hasAny(durl, "script", "bundle", "core", "loader", "asset", "runtime") ||
+		hasAny(name, "script", "bundle", "core", "loader", "asset", "runtime") ||
+		hasAny(display, "script", "bundle", "core", "loader", "asset", "runtime") {
+		return "library"
+	}
+
+	if (docType != "" && !hasUserFacingMetadata) || hasAny(docType, "tela-html", "tela-doc", "html", "markdown", "md") || (meta.DocCount > 0 && !hasUserFacingMetadata && durl != "") {
+		return "doc"
+	}
+
+	if meta.IsTelaIndex && durl != "" {
+		return "index"
+	}
+
+	if durl != "" && hasUserFacingMetadata {
+		return "index"
+	}
+
+	return ""
 }
 
 func UpsertTelaMetadataFromVariables(store TelaMetadataStore, scid string, topoheight int64, variables []*structures.SCIDVariable) error {

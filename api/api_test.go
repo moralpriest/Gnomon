@@ -520,7 +520,7 @@ func TestTelaMetadataSince_ReturnsTelaMetadata(t *testing.T) {
 
 func TestTelaMetadataAll_ReturnsOnlyTelaMetadata(t *testing.T) {
 	server := newBoltBackedTestAPIServer(t)
-	if err := server.BBSBackend.StoreTelaMetadata("scid-a", &structures.TelaMetadata{SCID: "scid-a", NameHdr: "Tela App", IsTelaIndex: true}); err != nil {
+	if err := server.BBSBackend.StoreTelaMetadata("scid-a", &structures.TelaMetadata{SCID: "scid-a", NameHdr: "Tela App", DisplayName: "Tela App", ArtifactKind: "index", IsTelaIndex: true}); err != nil {
 		t.Fatalf("failed to store tela metadata: %v", err)
 	}
 	if err := server.BBSBackend.StoreTelaMetadata("scid-b", &structures.TelaMetadata{SCID: "scid-b", NameHdr: "Other App", IsTelaIndex: false}); err != nil {
@@ -549,6 +549,9 @@ func TestTelaMetadataAll_ReturnsOnlyTelaMetadata(t *testing.T) {
 	result := results[0].(map[string]interface{})
 	if result["scid"] != "scid-a" {
 		t.Fatalf("unexpected tela all result: %#v", result)
+	}
+	if result["artifactKind"] != "index" || result["displayName"] != "Tela App" {
+		t.Fatalf("expected artifactKind/displayName fields, got %#v", result)
 	}
 }
 

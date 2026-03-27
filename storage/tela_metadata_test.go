@@ -104,6 +104,56 @@ func TestDeriveTelaMetadata_DerobeatsStyleFields(t *testing.T) {
 	if !meta.IsTelaIndex || meta.NameHdr != "DeroBeats" || meta.DescrHdr == "" || meta.IconHdr == "" || meta.DURL != "derobeats.tela" || meta.DocCount != 1 {
 		t.Fatalf("unexpected derobeats-style metadata: %#v", meta)
 	}
+	if meta.ArtifactKind != "index" || meta.DisplayName != "DeroBeats" {
+		t.Fatalf("unexpected derobeats-style classification: %#v", meta)
+	}
+}
+
+func TestDeriveTelaMetadata_LibraryArtifactKind(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-lib", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: "TELA INDEX"},
+		{Key: "dURL", Value: "app-core.js"},
+		{Key: "NameHdr", Value: "app-core.js.gz"},
+	})
+
+	if meta == nil || meta.ArtifactKind != "library" {
+		t.Fatalf("expected library artifact kind, got %#v", meta)
+	}
+}
+
+func TestDeriveTelaMetadata_DocShardArtifactKind(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-shard", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: "TELA INDEX"},
+		{Key: "dURL", Value: "image.tela.shard"},
+	})
+
+	if meta == nil || meta.ArtifactKind != "docshards" {
+		t.Fatalf("expected docshards artifact kind, got %#v", meta)
+	}
+}
+
+func TestDeriveTelaMetadata_BootstrapArtifactKind(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-bootstrap", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: "TELA INDEX bootstrap loader"},
+		{Key: "dURL", Value: "bootstrap.tela"},
+	})
+
+	if meta == nil || meta.ArtifactKind != "bootstrap" {
+		t.Fatalf("expected bootstrap artifact kind, got %#v", meta)
+	}
+}
+
+func TestDeriveTelaMetadata_DocArtifactKind(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-doc", 10, []*structures.SCIDVariable{
+		{Key: "C", Value: "TELA INDEX"},
+		{Key: "dURL", Value: "webguy.alpha.tela"},
+		{Key: "docType", Value: "TELA-HTML-1"},
+		{Key: "DescrHdr", Value: ""},
+	})
+
+	if meta == nil || meta.ArtifactKind != "doc" {
+		t.Fatalf("expected doc artifact kind, got %#v", meta)
+	}
 }
 
 func TestBackfillTelaMetadata_BoltDB(t *testing.T) {

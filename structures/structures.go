@@ -107,16 +107,18 @@ type TelaChanged_Result struct {
 }
 
 type TelaMetadata struct {
-	SCID        string `json:"scid"`
-	Code        string `json:"code,omitempty"`
-	DURL        string `json:"durl,omitempty"`
-	NameHdr     string `json:"nameHdr,omitempty"`
-	DescrHdr    string `json:"descrHdr,omitempty"`
-	IconHdr     string `json:"iconHdr,omitempty"`
-	DocType     string `json:"docType,omitempty"`
-	DocCount    int    `json:"docCount,omitempty"`
-	IsTelaIndex bool   `json:"isTelaIndex"`
-	Topoheight  int64  `json:"topoheight"`
+	SCID         string `json:"scid"`
+	Code         string `json:"code,omitempty"`
+	DURL         string `json:"durl,omitempty"`
+	NameHdr      string `json:"nameHdr,omitempty"`
+	DescrHdr     string `json:"descrHdr,omitempty"`
+	IconHdr      string `json:"iconHdr,omitempty"`
+	DocType      string `json:"docType,omitempty"`
+	DocCount     int    `json:"docCount,omitempty"`
+	ArtifactKind string `json:"artifactKind,omitempty"`
+	DisplayName  string `json:"displayName,omitempty"`
+	IsTelaIndex  bool   `json:"isTelaIndex"`
+	Topoheight   int64  `json:"topoheight"`
 }
 
 type TelaMetadata_Result struct {
