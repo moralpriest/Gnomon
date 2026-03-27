@@ -70,15 +70,15 @@ func TestFilterChangedSCIDs(t *testing.T) {
 	}
 }
 
-func TestTelaIndexClassifierMatchesDerobeatsStyleFields(t *testing.T) {
+func TestTelaIndexClassifierMatchesAppStyleFields(t *testing.T) {
 	store := classifierStore{
 		heights: map[string][]int64{"scid-a": {5}},
 		vars: map[string][]*structures.SCIDVariable{
 			"scid-a": {
-				{Key: "var_header_name", Value: "DeroBeats"},
-				{Key: "var_header_description", Value: "Decentralized music platform."},
+				{Key: "var_header_name", Value: "Example App"},
+				{Key: "var_header_description", Value: "A decentralized application."},
 				{Key: "var_header_icon", Value: "https://example/icon.png"},
-				{Key: "dURL", Value: "derobeats.tela"},
+				{Key: "dURL", Value: "example-app.tela"},
 				{Key: "telaVersion", Value: "1.1.0"},
 				{Key: "DOC1", Value: "doc-hash"},
 			},
@@ -87,6 +87,6 @@ func TestTelaIndexClassifierMatchesDerobeatsStyleFields(t *testing.T) {
 
 	classifier := NewClassifier(ClassifierTelaIndex, store)
 	if !classifier.Matches("scid-a") {
-		t.Fatalf("expected derobeats-style scid to match tela classifier")
+		t.Fatalf("expected app-style scid to match tela classifier")
 	}
 }

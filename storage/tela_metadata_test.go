@@ -87,13 +87,13 @@ func TestDeriveTelaMetadata_AlternateFields(t *testing.T) {
 	}
 }
 
-func TestDeriveTelaMetadata_DerobeatsStyleFields(t *testing.T) {
-	meta := DeriveTelaMetadata("scid-derobeats", 20, []*structures.SCIDVariable{
+func TestDeriveTelaMetadata_AppStyleHeaderFields(t *testing.T) {
+	meta := DeriveTelaMetadata("scid-app", 20, []*structures.SCIDVariable{
 		{Key: "C", Value: "Function InitializePrivate() Uint64"},
-		{Key: "var_header_name", Value: "DeroBeats"},
-		{Key: "var_header_description", Value: "Decentralized music platform."},
+		{Key: "var_header_name", Value: "Example App"},
+		{Key: "var_header_description", Value: "A decentralized application."},
 		{Key: "var_header_icon", Value: "https://example/icon.png"},
-		{Key: "dURL", Value: "derobeats.tela"},
+		{Key: "dURL", Value: "example-app.tela"},
 		{Key: "telaVersion", Value: "1.1.0"},
 		{Key: "DOC1", Value: "doc-hash"},
 	})
@@ -101,11 +101,11 @@ func TestDeriveTelaMetadata_DerobeatsStyleFields(t *testing.T) {
 	if meta == nil {
 		t.Fatalf("expected metadata to be derived")
 	}
-	if !meta.IsTelaIndex || meta.NameHdr != "DeroBeats" || meta.DescrHdr == "" || meta.IconHdr == "" || meta.DURL != "derobeats.tela" || meta.DocCount != 1 {
-		t.Fatalf("unexpected derobeats-style metadata: %#v", meta)
+	if !meta.IsTelaIndex || meta.NameHdr != "Example App" || meta.DescrHdr == "" || meta.IconHdr == "" || meta.DURL != "example-app.tela" || meta.DocCount != 1 {
+		t.Fatalf("unexpected app-style metadata: %#v", meta)
 	}
-	if meta.ArtifactKind != "index" || meta.DisplayName != "DeroBeats" {
-		t.Fatalf("unexpected derobeats-style classification: %#v", meta)
+	if meta.ArtifactKind != "index" || meta.DisplayName != "Example App" {
+		t.Fatalf("unexpected app-style classification: %#v", meta)
 	}
 }
 
@@ -168,10 +168,10 @@ func TestBackfillTelaMetadata_BoltDB(t *testing.T) {
 		t.Fatalf("failed to store owner: %v", err)
 	}
 	vars := []*structures.SCIDVariable{
-		{Key: "var_header_name", Value: "DeroBeats"},
-		{Key: "var_header_description", Value: "Decentralized music platform."},
+		{Key: "var_header_name", Value: "Example App"},
+		{Key: "var_header_description", Value: "A decentralized application."},
 		{Key: "var_header_icon", Value: "https://example/icon.png"},
-		{Key: "dURL", Value: "derobeats.tela"},
+		{Key: "dURL", Value: "example-app.tela"},
 		{Key: "telaVersion", Value: "1.1.0"},
 		{Key: "DOC1", Value: "doc-hash"},
 		{Key: "C", Value: "Function InitializePrivate() Uint64"},
@@ -191,7 +191,7 @@ func TestBackfillTelaMetadata_BoltDB(t *testing.T) {
 	}
 
 	meta := bbs.GetTelaMetadata(scid)
-	if meta == nil || meta.NameHdr != "DeroBeats" || meta.DURL != "derobeats.tela" || !meta.IsTelaIndex {
+	if meta == nil || meta.NameHdr != "Example App" || meta.DURL != "example-app.tela" || !meta.IsTelaIndex {
 		t.Fatalf("unexpected backfilled tela metadata: %#v", meta)
 	}
 }
@@ -208,10 +208,10 @@ func TestRebuildTelaMetadataAtOrBelow_MaxTopoheightUsesLatestInteraction(t *test
 		t.Fatalf("failed to store owner: %v", err)
 	}
 	vars := []*structures.SCIDVariable{
-		{Key: "var_header_name", Value: "DeroBeats"},
-		{Key: "var_header_description", Value: "Decentralized music platform."},
+		{Key: "var_header_name", Value: "Example App"},
+		{Key: "var_header_description", Value: "A decentralized application."},
 		{Key: "var_header_icon", Value: "https://example/icon.png"},
-		{Key: "dURL", Value: "derobeats.tela"},
+		{Key: "dURL", Value: "example-app.tela"},
 		{Key: "telaVersion", Value: "1.1.0"},
 		{Key: "DOC1", Value: "doc-hash"},
 		{Key: "C", Value: "Function InitializePrivate() Uint64"},
@@ -228,7 +228,49 @@ func TestRebuildTelaMetadataAtOrBelow_MaxTopoheightUsesLatestInteraction(t *test
 	}
 
 	meta := bbs.GetTelaMetadata(scid)
-	if meta == nil || meta.NameHdr != "DeroBeats" || meta.Topoheight != 6784686 {
+	if meta == nil || meta.NameHdr != "Example App" || meta.Topoheight != 6784686 {
 		t.Fatalf("unexpected rebuilt tela metadata: %#v", meta)
+	}
+}
+
+func TestRefreshTelaMetadataIfIncomplete_BoltDB(t *testing.T) {
+	bbs, err := NewBBoltDB(t.TempDir(), "tela-refresh.db")
+	if err != nil {
+		t.Fatalf("failed to create bbolt store: %v", err)
+	}
+	defer bbs.DB.Close()
+
+	scid := "b1e1cba50cbfd8edbb12b01220ffebbece300d4936516a87fc2255fa8e23d8a2"
+	if _, err := bbs.StoreOwner(scid, "owner"); err != nil {
+		t.Fatalf("failed to store owner: %v", err)
+	}
+	if _, err := bbs.StoreInstallHeight(scid, 5); err != nil {
+		t.Fatalf("failed to store install height: %v", err)
+	}
+	vars := []*structures.SCIDVariable{
+		{Key: "var_header_name", Value: "Example App"},
+		{Key: "var_header_description", Value: "A decentralized application."},
+		{Key: "var_header_icon", Value: "https://example/icon.png"},
+		{Key: "dURL", Value: "example-app.tela"},
+		{Key: "telaVersion", Value: "1.1.0"},
+		{Key: "DOC1", Value: "doc-hash"},
+		{Key: "C", Value: "Function InitializePrivate() Uint64"},
+	}
+	if _, err := bbs.StoreSCIDVariableDetails(scid, vars, 5); err != nil {
+		t.Fatalf("failed to store vars: %v", err)
+	}
+	if _, err := bbs.StoreSCIDInteractionHeight(scid, 5); err != nil {
+		t.Fatalf("failed to store interaction height: %v", err)
+	}
+	if err := bbs.StoreTelaMetadata(scid, &structures.TelaMetadata{SCID: scid, IsTelaIndex: true, Topoheight: 5}); err != nil {
+		t.Fatalf("failed to store incomplete metadata: %v", err)
+	}
+
+	meta, err := RefreshTelaMetadataIfIncomplete(bbs, scid)
+	if err != nil {
+		t.Fatalf("failed to refresh incomplete metadata: %v", err)
+	}
+	if meta == nil || meta.DisplayName != "Example App" || meta.ArtifactKind != "index" {
+		t.Fatalf("unexpected refreshed metadata: %#v", meta)
 	}
 }

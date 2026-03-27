@@ -1,12 +1,23 @@
 package indexer
 
-import "github.com/civilware/Gnomon/structures"
+import (
+	"github.com/civilware/Gnomon/storage"
+	"github.com/civilware/Gnomon/structures"
+)
 
 func (indexer *Indexer) GetTelaMetadata(scid string) *structures.TelaMetadata {
 	switch indexer.DBType {
 	case "gravdb":
+		meta, err := storage.RefreshTelaMetadataIfIncomplete(indexer.GravDBBackend, scid)
+		if err == nil {
+			return meta
+		}
 		return indexer.GravDBBackend.GetTelaMetadata(scid)
 	case "boltdb":
+		meta, err := storage.RefreshTelaMetadataIfIncomplete(indexer.BBSBackend, scid)
+		if err == nil {
+			return meta
+		}
 		return indexer.BBSBackend.GetTelaMetadata(scid)
 	default:
 		return nil
@@ -30,12 +41,18 @@ func (indexer *Indexer) GetAllTelaMetadata() *structures.TelaMetadata_Result {
 	switch indexer.DBType {
 	case "gravdb":
 		for _, meta := range indexer.GravDBBackend.GetAllTelaMetadata() {
+			if meta != nil && storage.NeedsTelaMetadataRefresh(meta) {
+				meta, _ = storage.RefreshTelaMetadataIfIncomplete(indexer.GravDBBackend, meta.SCID)
+			}
 			if meta != nil && meta.IsTelaIndex {
 				results = append(results, *meta)
 			}
 		}
 	case "boltdb":
 		for _, meta := range indexer.BBSBackend.GetAllTelaMetadata() {
+			if meta != nil && storage.NeedsTelaMetadataRefresh(meta) {
+				meta, _ = storage.RefreshTelaMetadataIfIncomplete(indexer.BBSBackend, meta.SCID)
+			}
 			if meta != nil && meta.IsTelaIndex {
 				results = append(results, *meta)
 			}

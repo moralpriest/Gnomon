@@ -36,7 +36,7 @@ func TestIndexerGetAllTelaMetadata(t *testing.T) {
 	}
 	defer bbs.DB.Close()
 
-	if err := bbs.StoreTelaMetadata("scid-a", &structures.TelaMetadata{SCID: "scid-a", NameHdr: "Example", IsTelaIndex: true}); err != nil {
+	if err := bbs.StoreTelaMetadata("scid-a", &structures.TelaMetadata{SCID: "scid-a", NameHdr: "Example", DisplayName: "Example", ArtifactKind: "index", IsTelaIndex: true}); err != nil {
 		t.Fatalf("failed to store tela metadata: %v", err)
 	}
 	if err := bbs.StoreTelaMetadata("scid-b", &structures.TelaMetadata{SCID: "scid-b", NameHdr: "Other", IsTelaIndex: false}); err != nil {

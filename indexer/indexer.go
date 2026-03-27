@@ -202,16 +202,6 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			indexer.Unlock()
 		}
 
-		switch indexer.DBType {
-		case "gravdb":
-			if err := storage.BackfillTelaMetadata(indexer.GravDBBackend); err != nil {
-				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
-			}
-		case "boltdb":
-			if err := storage.BackfillTelaMetadata(indexer.BBSBackend); err != nil {
-				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
-			}
-		}
 	}
 
 	for _, vi := range structures.Hardcoded_SCIDS {
@@ -458,6 +448,20 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	if blockParallelNum <= 0 {
 		blockParallelNum = 1
 	}
+
+	if len(pre_validatedSCIDs) > 0 {
+		switch indexer.DBType {
+		case "gravdb":
+			if err := storage.BackfillTelaMetadata(indexer.GravDBBackend); err != nil {
+				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
+			}
+		case "boltdb":
+			if err := storage.BackfillTelaMetadata(indexer.BBSBackend); err != nil {
+				logger.Errorf("[StartDaemonMode] Error backfilling TELA metadata: %v", err)
+			}
+		}
+	}
+
 	logger.Printf("[StartDaemonMode] Set number of parallel blocks to index to '%d'. Starting index routine...", blockParallelNum)
 
 	go func() {

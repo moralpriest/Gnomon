@@ -25,6 +25,7 @@ type TelaMetadataStore interface {
 type TelaMetadataVariableStore interface {
 	TelaMetadataStore
 	GetAllOwnersAndSCIDs() map[string]string
+	GetAllSCIDsAndInstallHeights() map[string]int64
 	GetSCIDVariableDetailsAtTopoheight(scid string, topoheight int64) []*structures.SCIDVariable
 	GetSCIDInteractionHeight(scid string) []int64
 	GetInteractionIndex(topoheight int64, heights []int64, rmax bool) int64
@@ -265,12 +266,46 @@ func BackfillTelaMetadata(store TelaMetadataVariableStore) error {
 	if store == nil {
 		return nil
 	}
+	scids := make(map[string]struct{})
 	for scid := range store.GetAllOwnersAndSCIDs() {
+		scids[scid] = struct{}{}
+	}
+	for scid := range store.GetAllSCIDsAndInstallHeights() {
+		scids[scid] = struct{}{}
+	}
+	for scid := range scids {
 		if err := RebuildTelaMetadataAtOrBelow(store, scid, int64(^uint64(0)>>1)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func NeedsTelaMetadataRefresh(meta *structures.TelaMetadata) bool {
+	if meta == nil {
+		return true
+	}
+	if meta.IsTelaIndex && strings.TrimSpace(meta.DisplayName) == "" {
+		return true
+	}
+	if meta.IsTelaIndex && strings.TrimSpace(meta.ArtifactKind) == "" {
+		return true
+	}
+	return false
+}
+
+func RefreshTelaMetadataIfIncomplete(store TelaMetadataVariableStore, scid string) (*structures.TelaMetadata, error) {
+	if store == nil || scid == "" {
+		return nil, nil
+	}
+	meta := store.GetTelaMetadata(scid)
+	if !NeedsTelaMetadataRefresh(meta) {
+		return meta, nil
+	}
+	if err := RebuildTelaMetadataAtOrBelow(store, scid, int64(^uint64(0)>>1)); err != nil {
+		return nil, err
+	}
+	return store.GetTelaMetadata(scid), nil
 }
 
 func (bbs *BboltStore) StoreTelaMetadata(scid string, metadata *structures.TelaMetadata) error {
