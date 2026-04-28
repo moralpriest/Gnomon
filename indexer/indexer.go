@@ -54,8 +54,9 @@ type Indexer struct {
 	StoreIntegrators  bool
 	ValidatedSCs      []string
 	CloseOnDisconnect bool
-	FastSyncConfig    *structures.FastSyncConfig
-	Status            string
+	FastSyncConfig          *structures.FastSyncConfig
+	Status                  string
+	InteractionIndexReady   atomic.Bool
 	sync.RWMutex
 }
 
@@ -74,6 +75,22 @@ func IsConnected() bool {
 
 func SetConnected(b bool) {
 	connected.Store(b)
+}
+
+// IsFullyQueryable returns true when the indexer is initialized, has a
+// positive last indexed height, has completed its initial interaction height
+// indexing round, and the daemon RPC connection is alive.
+func (indexer *Indexer) IsFullyQueryable() bool {
+	if indexer == nil || indexer.RPC == nil {
+		return false
+	}
+	if indexer.LastIndexedHeight <= 0 {
+		return false
+	}
+	if !indexer.InteractionIndexReady.Load() {
+		return false
+	}
+	return IsConnected()
 }
 
 // local logger
@@ -334,6 +351,9 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 			}
 		}
 	}
+
+	// Mark that the initial interaction height indexing round is complete.
+	indexer.InteractionIndexReady.Store(true)
 
 	if storedindex > indexer.LastIndexedHeight {
 		logger.Printf("[StartDaemonMode-storedIndex] Continuing from last indexed height %v", storedindex)
