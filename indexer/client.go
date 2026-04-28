@@ -105,6 +105,35 @@ func (client *Client) Connect(endpoint string) (err error) {
 	return err
 }
 
+// GetHealthyRPC checks whether the current RPC client connection is alive by
+// sending a lightweight DERO.Ping call with a short timeout. If the client is
+// nil, the underlying websocket is nil, or the ping fails, an error is
+// returned so the caller can decide to reconnect.
+func (client *Client) GetHealthyRPC() (*jrpc2.Client, func(), error) {
+	client.RLock()
+	rpcClient := client.RPC
+	wsConn := client.WS
+	client.RUnlock()
+
+	if rpcClient == nil {
+		return nil, nil, fmt.Errorf("rpc client not initialized")
+	}
+	if wsConn == nil {
+		return nil, nil, fmt.Errorf("websocket connection not initialized")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var ping string
+	if err := rpcClient.CallResult(ctx, "DERO.Ping", nil, &ping); err != nil {
+		return nil, nil, fmt.Errorf("rpc health check failed: %w", err)
+	}
+
+	// The returned client is owned by the Indexer; cleanup is a no-op.
+	return rpcClient, func() {}, nil
+}
+
 // DERO.GetBlockHeaderByTopoHeight rpc call for returning block hash at a particular topoheight
 func (client *Client) getBlockHash(height uint64) (hash string, err error) {
 	//logger.Debugf("[getBlockHash] Attempting to get block details at topoheight %v", height)
