@@ -355,6 +355,9 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	// Mark that the initial interaction height indexing round is complete.
 	indexer.InteractionIndexReady.Store(true)
 
+	// Start background pre-warming of TELA interaction heights.
+	indexer.startTelaPrewarm()
+
 	if storedindex > indexer.LastIndexedHeight {
 		logger.Printf("[StartDaemonMode-storedIndex] Continuing from last indexed height %v", storedindex)
 		indexer.Lock()
@@ -3292,6 +3295,48 @@ func (indexer *Indexer) GetRandInteractionAddresses(count int64, config *structu
 	}
 
 	return
+}
+
+// startTelaPrewarm launches a background goroutine that periodically
+// pre-fetches interaction height data for known TELA SCIDs so that
+// subsequent queries are fast. The goroutine exits when the indexer
+// is closing.
+func (indexer *Indexer) startTelaPrewarm() {
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if indexer.Closing.Load() {
+					return
+				}
+
+				var telaMeta []*structures.TelaMetadata
+				switch indexer.DBType {
+				case "gravdb":
+					telaMeta = indexer.GravDBBackend.GetAllTelaMetadata()
+				case "boltdb":
+					telaMeta = indexer.BBSBackend.GetAllTelaMetadata()
+				}
+
+				for _, meta := range telaMeta {
+					if indexer.Closing.Load() {
+						return
+					}
+					if !meta.IsTelaIndex {
+						continue
+					}
+					switch indexer.DBType {
+					case "gravdb":
+						_ = indexer.GravDBBackend.GetSCIDInteractionHeight(meta.SCID)
+					case "boltdb":
+						_ = indexer.BBSBackend.GetSCIDInteractionHeight(meta.SCID)
+					}
+				}
+			}
+		}
+	}()
 }
 
 // Close cleanly the indexer
