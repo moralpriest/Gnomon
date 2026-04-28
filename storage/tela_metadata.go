@@ -346,11 +346,19 @@ func BackfillTelaMetadata(store TelaMetadataVariableStore) error {
 	for scid := range store.GetAllSCIDsAndInstallHeights() {
 		scids[scid] = struct{}{}
 	}
+	total := len(scids)
+	logger.Printf("[BackfillTelaMetadata] Starting backfill for %d SCIDs", total)
+	count := 0
 	for scid := range scids {
 		if err := RebuildTelaMetadataAtOrBelow(store, scid, int64(^uint64(0)>>1)); err != nil {
 			return err
 		}
+		count++
+		if count%10000 == 0 {
+			logger.Printf("[BackfillTelaMetadata] Progress: %d/%d SCIDs processed", count, total)
+		}
 	}
+	logger.Printf("[BackfillTelaMetadata] Complete: %d/%d SCIDs processed", count, total)
 	return nil
 }
 
