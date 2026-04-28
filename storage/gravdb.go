@@ -396,8 +396,10 @@ func (g *GravitonStore) StoreInstallHeight(scid string, height int64, nocommit b
 	}
 
 	if err == nil && changes {
-		if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
-			return tree, changes, jerr
+		if !nocommit {
+			if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
+				return tree, changes, jerr
+			}
 		}
 	}
 	return tree, changes, nil
@@ -691,8 +693,10 @@ func (g *GravitonStore) StoreInvokeDetails(scid string, signer string, entrypoin
 	}
 
 	if err == nil && changes {
-		if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
-			return tree, changes, jerr
+		if !nocommit {
+			if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
+				return tree, changes, jerr
+			}
 		}
 	}
 	return tree, changes, nil
@@ -740,8 +744,10 @@ func (g *GravitonStore) StoreSCIDInstallSCDetails(scid string, invokedetails *st
 	}
 
 	if err == nil && changes && invokedetails != nil {
-		if jerr := g.StoreSCIDChange(scid, invokedetails.Height); jerr != nil {
-			return tree, changes, jerr
+		if !nocommit {
+			if jerr := g.StoreSCIDChange(scid, invokedetails.Height); jerr != nil {
+				return tree, changes, jerr
+			}
 		}
 	}
 	return tree, changes, nil
@@ -1027,8 +1033,10 @@ func (g *GravitonStore) StoreSCIDVariableDetails(scid string, variables []*struc
 	}
 
 	if err == nil && changes {
-		if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
-			return tree, changes, jerr
+		if !nocommit {
+			if jerr := g.StoreSCIDChange(scid, topoheight); jerr != nil {
+				return tree, changes, jerr
+			}
 		}
 	}
 	return tree, changes, nil
@@ -1545,8 +1553,10 @@ func (g *GravitonStore) StoreSCIDInteractionHeight(scid string, height int64, no
 	}
 
 	if err == nil && changes {
-		if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
-			return tree, changes, jerr
+		if !nocommit {
+			if jerr := g.StoreSCIDChange(scid, height); jerr != nil {
+				return tree, changes, jerr
+			}
 		}
 	}
 	return tree, changes, nil
