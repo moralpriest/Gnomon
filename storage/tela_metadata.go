@@ -667,3 +667,248 @@ func (g *GravitonStore) DeleteTelaMetadata(scid string) error {
 	_, cerr := graviton.Commit(tree)
 	return cerr
 }
+
+const telaIndexCacheBucket = "telaindexcache"
+const telaCandidateBucket = "telacandidates"
+
+// --- BoltDB TELA cache methods ---
+
+func (bbs *BboltStore) StoreTelaIndexCache(scid string, data []byte) error {
+	if scid == "" {
+		return nil
+	}
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(telaIndexCacheBucket))
+		if err != nil {
+			return fmt.Errorf("bucket: %s", err)
+		}
+		return b.Put([]byte(scid), data)
+	})
+}
+
+func (bbs *BboltStore) GetTelaIndexCache(scid string) []byte {
+	var data []byte
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaIndexCacheBucket))
+		if b == nil {
+			return nil
+		}
+		data = b.Get([]byte(scid))
+		return nil
+	})
+	return data
+}
+
+func (bbs *BboltStore) GetAllTelaIndexCaches() map[string][]byte {
+	results := make(map[string][]byte)
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaIndexCacheBucket))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); v != nil; k, v = c.Next() {
+			results[string(k)] = v
+		}
+		return nil
+	})
+	return results
+}
+
+func (bbs *BboltStore) StoreTelaCandidate(scid string, status string) error {
+	if scid == "" {
+		return nil
+	}
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(telaCandidateBucket))
+		if err != nil {
+			return fmt.Errorf("bucket: %s", err)
+		}
+		return b.Put([]byte(scid), []byte(status))
+	})
+}
+
+func (bbs *BboltStore) GetTelaCandidate(scid string) string {
+	var status string
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaCandidateBucket))
+		if b == nil {
+			return nil
+		}
+		v := b.Get([]byte(scid))
+		if v != nil {
+			status = string(v)
+		}
+		return nil
+	})
+	return status
+}
+
+func (bbs *BboltStore) GetAllTelaCandidates() map[string]string {
+	results := make(map[string]string)
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaCandidateBucket))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); v != nil; k, v = c.Next() {
+			results[string(k)] = string(v)
+		}
+		return nil
+	})
+	return results
+}
+
+// --- Graviton TELA cache methods ---
+
+func (g *GravitonStore) StoreTelaIndexCache(scid string, data []byte) error {
+	if scid == "" {
+		return nil
+	}
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+	tree, _ := ss.GetTree(telaIndexCacheBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, _ = prevss.GetTree(telaIndexCacheBucket)
+		if tree == nil {
+			return preverr
+		}
+	}
+	tree.Put([]byte(scid), data)
+	_, cerr := graviton.Commit(tree)
+	return cerr
+}
+
+func (g *GravitonStore) GetTelaIndexCache(scid string) []byte {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil
+	}
+	tree, _ := ss.GetTree(telaIndexCacheBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return nil
+		}
+		tree, _ = prevss.GetTree(telaIndexCacheBucket)
+		if tree == nil {
+			return nil
+		}
+	}
+	v, _ := tree.Get([]byte(scid))
+	return v
+}
+
+func (g *GravitonStore) GetAllTelaIndexCaches() map[string][]byte {
+	g.waitForMigration()
+	results := make(map[string][]byte)
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return results
+	}
+	tree, _ := ss.GetTree(telaIndexCacheBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return results
+		}
+		tree, _ = prevss.GetTree(telaIndexCacheBucket)
+		if tree == nil {
+			return results
+		}
+	}
+	c := tree.Cursor()
+	for k, v, err := c.First(); err == nil; k, v, err = c.Next() {
+		results[string(k)] = v
+	}
+	return results
+}
+
+func (g *GravitonStore) StoreTelaCandidate(scid string, status string) error {
+	if scid == "" {
+		return nil
+	}
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+	tree, _ := ss.GetTree(telaCandidateBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, _ = prevss.GetTree(telaCandidateBucket)
+		if tree == nil {
+			return preverr
+		}
+	}
+	tree.Put([]byte(scid), []byte(status))
+	_, cerr := graviton.Commit(tree)
+	return cerr
+}
+
+func (g *GravitonStore) GetTelaCandidate(scid string) string {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return ""
+	}
+	tree, _ := ss.GetTree(telaCandidateBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return ""
+		}
+		tree, _ = prevss.GetTree(telaCandidateBucket)
+		if tree == nil {
+			return ""
+		}
+	}
+	v, _ := tree.Get([]byte(scid))
+	if v == nil {
+		return ""
+	}
+	return string(v)
+}
+
+func (g *GravitonStore) GetAllTelaCandidates() map[string]string {
+	g.waitForMigration()
+	results := make(map[string]string)
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return results
+	}
+	tree, _ := ss.GetTree(telaCandidateBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return results
+		}
+		tree, _ = prevss.GetTree(telaCandidateBucket)
+		if tree == nil {
+			return results
+		}
+	}
+	c := tree.Cursor()
+	for k, v, err := c.First(); err == nil; k, v, err = c.Next() {
+		results[string(k)] = string(v)
+	}
+	return results
+}
