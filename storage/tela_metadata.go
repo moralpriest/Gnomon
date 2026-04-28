@@ -433,6 +433,50 @@ func (bbs *BboltStore) GetAllTelaMetadata() (results []*structures.TelaMetadata)
 	return results
 }
 
+func (bbs *BboltStore) GetAllTelaSCIDs() []string {
+	var scids []string
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaMetadataBucket))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); v != nil; k, v = c.Next() {
+			var curr *structures.TelaMetadata
+			_ = json.Unmarshal(v, &curr)
+			if curr != nil && curr.IsTelaIndex {
+				scids = append(scids, string(k))
+			}
+		}
+		return nil
+	})
+	return scids
+}
+
+func (bbs *BboltStore) GetQueryableSCIDs() []string {
+	var scids []string
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(telaMetadataBucket))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); v != nil; k, v = c.Next() {
+			var curr *structures.TelaMetadata
+			_ = json.Unmarshal(v, &curr)
+			if curr == nil || !curr.IsTelaIndex {
+				continue
+			}
+			scid := string(k)
+			if len(bbs.GetSCIDInteractionHeight(scid)) > 0 {
+				scids = append(scids, scid)
+			}
+		}
+		return nil
+	})
+	return scids
+}
+
 func (bbs *BboltStore) DeleteTelaMetadata(scid string) error {
 	if scid == "" {
 		return nil
@@ -530,6 +574,70 @@ func (g *GravitonStore) GetAllTelaMetadata() (results []*structures.TelaMetadata
 	}
 	sort.SliceStable(results, func(i, j int) bool { return results[i].SCID < results[j].SCID })
 	return results
+}
+
+func (g *GravitonStore) GetAllTelaSCIDs() []string {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil
+	}
+	tree, _ := ss.GetTree(telaMetadataBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return nil
+		}
+		tree, _ = prevss.GetTree(telaMetadataBucket)
+		if tree == nil {
+			return nil
+		}
+	}
+	var scids []string
+	c := tree.Cursor()
+	for k, v, err := c.First(); err == nil; k, v, err = c.Next() {
+		var curr *structures.TelaMetadata
+		_ = json.Unmarshal(v, &curr)
+		if curr != nil && curr.IsTelaIndex {
+			scids = append(scids, string(k))
+		}
+	}
+	return scids
+}
+
+func (g *GravitonStore) GetQueryableSCIDs() []string {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return nil
+	}
+	tree, _ := ss.GetTree(telaMetadataBucket)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return nil
+		}
+		tree, _ = prevss.GetTree(telaMetadataBucket)
+		if tree == nil {
+			return nil
+		}
+	}
+	var scids []string
+	c := tree.Cursor()
+	for k, v, err := c.First(); err == nil; k, v, err = c.Next() {
+		var curr *structures.TelaMetadata
+		_ = json.Unmarshal(v, &curr)
+		if curr == nil || !curr.IsTelaIndex {
+			continue
+		}
+		scid := string(k)
+		if len(g.GetSCIDInteractionHeight(scid)) > 0 {
+			scids = append(scids, scid)
+		}
+	}
+	return scids
 }
 
 func (g *GravitonStore) DeleteTelaMetadata(scid string) error {
