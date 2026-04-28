@@ -210,8 +210,6 @@ func (client *Client) GetTxPool() (txlist []string, err error) {
 func (client *Client) GetSCVariables(scid string, topoheight int64, keysuint64 []uint64, keysstring []string, keysbytes [][]byte, codeonly bool) (variables []*structures.SCIDVariable, code string, balances map[string]uint64, err error) {
 	//balances = make(map[string]uint64)
 
-	isAlpha := regexp.MustCompile(`^[A-Za-z]+$`).MatchString
-
 	var getSCResults rpc.GetSC_Result
 	var getSCParams rpc.GetSC_Params
 	if codeonly {
@@ -255,7 +253,17 @@ func (client *Client) GetSCVariables(scid string, topoheight int64, keysuint64 [
 		break
 	}
 
+	variables, code, balances = parseGetSCResult(scid, getSCResults, keysuint64, keysstring, keysbytes)
+	return variables, code, balances, nil
+}
+
+// parseGetSCResult converts a raw DERO.GetSC result into structured SCIDVariable
+// slices, code, and balances. It mirrors the parsing logic originally embedded in
+// GetSCVariables so that batch callers can reuse it without re-issuing RPC calls.
+func parseGetSCResult(scid string, getSCResults rpc.GetSC_Result, keysuint64 []uint64, keysstring []string, keysbytes [][]byte) (variables []*structures.SCIDVariable, code string, balances map[string]uint64) {
+	isAlpha := regexp.MustCompile(`^[A-Za-z]+$`).MatchString
 	code = getSCResults.Code
+	balances = getSCResults.Balances
 
 	for k, v := range getSCResults.VariableStringKeys {
 		currVar := &structures.SCIDVariable{}
@@ -425,7 +433,5 @@ func (client *Client) GetSCVariables(scid string, topoheight int64, keysuint64 [
 		}
 	}
 
-	balances = getSCResults.Balances
-
-	return variables, code, balances, err
+	return variables, code, balances
 }

@@ -62,6 +62,14 @@ type SCIDVariable struct {
 	Value interface{}
 }
 
+// SCData holds the parsed result of a DERO.GetSC call for a single SCID.
+type SCData struct {
+	SCID      string
+	Variables []*SCIDVariable
+	Code      string
+	Balances  map[string]uint64
+}
+
 type FastSyncConfig struct {
 	Enabled           bool
 	SkipFSRecheck     bool

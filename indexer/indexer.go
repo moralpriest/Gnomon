@@ -20,6 +20,7 @@ import (
 	"github.com/civilware/Gnomon/structures"
 	"github.com/schollz/progressbar/v3"
 
+	"github.com/creachadair/jrpc2"
 	"github.com/deroproject/derohe/block"
 	"github.com/deroproject/derohe/cryptography/bn256"
 	"github.com/deroproject/derohe/cryptography/crypto"
@@ -3337,6 +3338,61 @@ func (indexer *Indexer) startTelaPrewarm() {
 			}
 		}
 	}()
+}
+
+// BatchGetSCData fetches smart-contract variables, code, and balances for a
+// batch of SCIDs using a single batched RPC call. It uses GetHealthyRPC to
+// ensure the connection is alive before issuing the batch. Results are returned
+// as a map keyed by SCID. SCIDs that fail individual lookup are omitted from
+// the result map but do not fail the entire batch.
+func (indexer *Indexer) BatchGetSCData(scids []string) (map[string]*structures.SCData, error) {
+	if len(scids) == 0 {
+		return map[string]*structures.SCData{}, nil
+	}
+
+	client, cleanup, err := indexer.RPC.GetHealthyRPC()
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	specs := make([]jrpc2.Spec, 0, len(scids))
+	for _, scid := range scids {
+		specs = append(specs, jrpc2.Spec{
+			Method: "DERO.GetSC",
+			Params: rpc.GetSC_Params{SCID: scid, Code: true, Variables: true},
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	responses, err := client.Batch(ctx, specs)
+	if err != nil {
+		return nil, fmt.Errorf("batch GetSC failed: %w", err)
+	}
+
+	results := make(map[string]*structures.SCData, len(scids))
+	for i, resp := range responses {
+		if resp.Error() != nil {
+			logger.Debugf("[BatchGetSCData] skipping %s due to RPC error: %v", scids[i], resp.Error())
+			continue
+		}
+		var getSCResult rpc.GetSC_Result
+		if err := resp.UnmarshalResult(&getSCResult); err != nil {
+			logger.Debugf("[BatchGetSCData] skipping %s due to unmarshal error: %v", scids[i], err)
+			continue
+		}
+		vars, code, balances := parseGetSCResult(scids[i], getSCResult, nil, nil, nil)
+		results[scids[i]] = &structures.SCData{
+			SCID:      scids[i],
+			Variables: vars,
+			Code:      code,
+			Balances:  balances,
+		}
+	}
+
+	return results, nil
 }
 
 // Close cleanly the indexer
