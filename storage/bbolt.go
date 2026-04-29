@@ -1022,6 +1022,37 @@ func (bbs *BboltStore) GetAllSCIDVariableDetails(scid string) (hVars []*structur
 	return
 }
 
+// HasSCIDVariable checks if any stored variable entry for scid contains the given key.
+// It returns true on the first match without loading all variables.
+func (bbs *BboltStore) HasSCIDVariable(scid string, key string) bool {
+	bName := scid + "vars"
+	found := false
+	bbs.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket([]byte(bName))
+		if b == nil {
+			return nil
+		}
+		c := b.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			if v == nil {
+				continue
+			}
+			var variables []*structures.SCIDVariable
+			if err := json.Unmarshal(v, &variables); err != nil {
+				continue
+			}
+			for _, vs := range variables {
+				if vs.Key == key {
+					found = true
+					return nil
+				}
+			}
+		}
+		return nil
+	})
+	return found
+}
+
 // Gets SC variable keys at given topoheight who's value equates to a given interface{} (string/uint64)
 func (bbs *BboltStore) GetSCIDKeysByValue(scid string, val interface{}, height int64, rmax bool) (keysstring []string, keysuint64 []uint64) {
 	scidInteractionHeights := bbs.GetSCIDInteractionHeight(scid)

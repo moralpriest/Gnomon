@@ -1435,6 +1435,45 @@ func (g *GravitonStore) GetAllSCIDVariableDetails(scid string) (hVars []*structu
 	return
 }
 
+// HasSCIDVariable checks if any stored variable entry for scid contains the given key.
+// It returns true on the first match without loading all variables.
+func (g *GravitonStore) HasSCIDVariable(scid string, key string) bool {
+	g.waitForMigration()
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return false
+	}
+	bName := scid + "vars"
+	tree, _ := ss.GetTree(bName)
+	if tree == nil {
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return false
+		}
+		tree, _ = prevss.GetTree(bName)
+		if tree == nil {
+			return false
+		}
+	}
+	c := tree.Cursor()
+	for _, v, err := c.First(); err == nil; _, v, err = c.Next() {
+		if v == nil {
+			continue
+		}
+		var variables []*structures.SCIDVariable
+		if err := json.Unmarshal(v, &variables); err != nil {
+			continue
+		}
+		for _, vs := range variables {
+			if vs.Key == key {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Gets SC variable keys at given topoheight who's value equates to a given interface{} (string/uint64)
 func (g *GravitonStore) GetSCIDKeysByValue(scid string, val interface{}, height int64, rmax bool) (keysstring []string, keysuint64 []uint64) {
 	scidInteractionHeights := g.GetSCIDInteractionHeight(scid)

@@ -131,11 +131,9 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 		}
 		break
 	}
-	time.Sleep(1 * time.Second)
 
 	// Continuously getInfo from daemon to update topoheight globally
 	go indexer.getInfo()
-	time.Sleep(1 * time.Second)
 
 	for {
 		if indexer.Closing.Load() {
@@ -147,7 +145,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 		indexer.RUnlock()
 		if chainHeight == int64(0) {
 			logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
-			time.Sleep(1 * time.Second)
+			time.Sleep(200 * time.Millisecond)
 			continue
 		}
 		break
@@ -978,6 +976,32 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 				fsi:      fsi,
 				contains: false,
 			})
+		}
+
+		// Classify TELA candidates from existing DB variables without RPC.
+		var telaCandidates []string
+		for scid := range fsiMap {
+			switch indexer.DBType {
+			case "gravdb":
+				if indexer.GravDBBackend.HasSCIDVariable(scid, "telaVersion") {
+					telaCandidates = append(telaCandidates, scid)
+				}
+			case "boltdb":
+				if indexer.BBSBackend.HasSCIDVariable(scid, "telaVersion") {
+					telaCandidates = append(telaCandidates, scid)
+				}
+			}
+		}
+		if len(telaCandidates) > 0 {
+			for _, scid := range telaCandidates {
+				switch indexer.DBType {
+				case "gravdb":
+					indexer.GravDBBackend.StoreTelaCandidate(scid, "valid_index")
+				case "boltdb":
+					indexer.BBSBackend.StoreTelaCandidate(scid, "valid_index")
+				}
+			}
+			logger.Printf("[AddSCIDToIndex] NoCode fastsync: classified and stored %d TELA candidates", len(telaCandidates))
 		}
 	}
 
@@ -3385,13 +3409,9 @@ func (indexer *Indexer) BackfillTelaCandidates(workers int) error {
 						continue
 					}
 					isTela := false
-					for k, v := range out.VariableStringKeys {
-						if k == "telaVersion" {
-							if val, ok := v.(string); ok && val != "" {
-								isTela = true
-								break
-							}
-						}
+					if len(out.ValuesString) > 0 && out.ValuesString[0] != "" &&
+						!strings.HasPrefix(out.ValuesString[0], "NOT AVAILABLE") {
+						isTela = true
 					}
 					resultCh <- result{scid: batch[j], isTela: isTela}
 				}
