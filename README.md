@@ -41,7 +41,7 @@ Built for the masses.
 
 ## Documentation
 
-[Documentation](./DOCS) including guides, [ROADMAP](./DOCS/ROADMAP.md), [CHANGELOG](./DOCS/CHANGELOG.md) and more.
+[Documentation](./DOCS) including guides, [ROADMAP](./DOCS/ROADMAP.md), [CHANGELOG](./DOCS/CHANGELOG.md), [Engram integration notes](./DOCS/ENGRAM_INTEGRATION.md) and more.
 
 ## GnomonIndexer (CLI)
 The [gnomonindexer](/cmd/gnomonindexer/gnomonindexer.go) command line interface allows for kicking off an indexer to analyze the DERO blockchain transactions. This indexer is primarily used for indexing smart contract interactions and asset transactions.

@@ -105,6 +105,49 @@ func (client *Client) Connect(endpoint string) (err error) {
 	return err
 }
 
+// DialRPCPool creates n fresh WebSocket connections to the given endpoint and
+// returns a slice of jrpc2 clients. The cleanup function must be called to
+// close all connections. Connections are closed in reverse order (websockets
+// first, then clients) to avoid hangs in jrpc2's background reader goroutines.
+func DialRPCPool(endpoint string, n int) ([]*jrpc2.Client, func(), error) {
+	clients := make([]*jrpc2.Client, 0, n)
+	conns := make([]*websocket.Conn, 0, n)
+
+	var daemonURI string
+	if strings.HasPrefix(endpoint, "https") {
+		daemonURI = "wss://" + strings.TrimPrefix(strings.ToLower(endpoint), "https://") + "/ws"
+	} else if strings.HasPrefix(endpoint, "http") {
+		daemonURI = "ws://" + strings.TrimPrefix(strings.ToLower(endpoint), "http://") + "/ws"
+	} else if strings.HasPrefix(endpoint, "wss") {
+		daemonURI = "wss://" + strings.TrimPrefix(strings.ToLower(endpoint), "wss://") + "/ws"
+	} else if strings.HasPrefix(endpoint, "ws") {
+		daemonURI = "ws://" + strings.TrimPrefix(strings.ToLower(endpoint), "ws://") + "/ws"
+	} else {
+		daemonURI = "ws://" + endpoint + "/ws"
+	}
+
+	cleanup := func() {
+		for i := range conns {
+			conns[i].Close()
+		}
+		for i := range clients {
+			clients[i].Close()
+		}
+	}
+
+	for i := 0; i < n; i++ {
+		ws, _, err := websocket.DefaultDialer.Dial(daemonURI, nil)
+		if err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("dial pool connection %d/%d: %w", i+1, n, err)
+		}
+		io := rwc.New(ws)
+		clients = append(clients, jrpc2.NewClient(channel.RawJSON(io, io), nil))
+		conns = append(conns, ws)
+	}
+	return clients, cleanup, nil
+}
+
 // GetHealthyRPC checks whether the current RPC client connection is alive by
 // sending a lightweight DERO.Ping call with a short timeout. If the client is
 // nil, the underlying websocket is nil, or the ping fails, an error is

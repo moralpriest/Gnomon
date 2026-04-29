@@ -249,6 +249,88 @@ func (g *GravitonStore) GetTxCount(txType string) int64 {
 }
 
 // Stores the owner (who deployed it) of a given scid
+// BatchStoreOwners stores multiple owner entries in a single snapshot commit.
+// This is used by AddSCIDToIndex batch mode to avoid snapshot mismatch issues.
+func (g *GravitonStore) BatchStoreOwners(entries map[string]string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	g.waitForMigration()
+
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+
+	tree, _ := ss.GetTree("owner")
+	if tree == nil {
+		var terr error
+		logger.Errorf("[Graviton-BatchStoreOwners] ERROR: Tree is nil for 'owner'. Attempting to rollback 1 snapshot")
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, terr = prevss.GetTree("owner")
+		if tree == nil {
+			logger.Errorf("[Graviton] ERROR: %v", terr)
+			return terr
+		}
+	}
+
+	for scid, owner := range entries {
+		tree.Put([]byte(scid), []byte(owner))
+	}
+
+	_, cerr := graviton.Commit(tree)
+	if cerr != nil {
+		logger.Errorf("[Graviton] ERROR: %v", cerr)
+		return cerr
+	}
+	return nil
+}
+
+// BatchStoreInstallHeights stores multiple install height entries in a single snapshot commit.
+func (g *GravitonStore) BatchStoreInstallHeights(entries map[string]int64) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	g.waitForMigration()
+
+	store := g.DB
+	ss, err := store.LoadSnapshot(0)
+	if err != nil {
+		return err
+	}
+
+	tree, _ := ss.GetTree("sciheight")
+	if tree == nil {
+		var terr error
+		logger.Errorf("[Graviton-BatchStoreInstallHeights] ERROR: Tree is nil for 'sciheight'. Attempting to rollback 1 snapshot")
+		prevss, preverr := store.LoadSnapshot(ss.GetVersion() - 1)
+		if preverr != nil {
+			return preverr
+		}
+		tree, terr = prevss.GetTree("sciheight")
+		if tree == nil {
+			logger.Errorf("[Graviton] ERROR: %v", terr)
+			return terr
+		}
+	}
+
+	for scid, height := range entries {
+		iHeight := strconv.FormatInt(height, 10)
+		tree.Put([]byte(scid), []byte(iHeight))
+	}
+
+	_, cerr := graviton.Commit(tree)
+	if cerr != nil {
+		logger.Errorf("[Graviton] ERROR: %v", cerr)
+		return cerr
+	}
+	return nil
+}
+
 func (g *GravitonStore) StoreOwner(scid string, owner string, nocommit bool) (tree *graviton.Tree, changes bool, err error) {
 	g.waitForMigration()
 

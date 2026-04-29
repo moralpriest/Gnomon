@@ -143,6 +143,47 @@ func (bbs *BboltStore) GetTxCount(txType string) (txCount int64) {
 }
 
 // Stores the owner (who deployed it) of a given scid
+// BatchStoreOwners stores multiple owner entries in a single BBolt transaction.
+func (bbs *BboltStore) BatchStoreOwners(entries map[string]string) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	bName := "scowner"
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bName))
+		if err != nil {
+			return fmt.Errorf("bucket: %s", err)
+		}
+		for scid, owner := range entries {
+			if err := b.Put([]byte(scid), []byte(owner)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// BatchStoreInstallHeights stores multiple install height entries in a single BBolt transaction.
+func (bbs *BboltStore) BatchStoreInstallHeights(entries map[string]int64) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	bName := "sciheight"
+	return bbs.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(bName))
+		if err != nil {
+			return fmt.Errorf("bucket: %s", err)
+		}
+		for scid, height := range entries {
+			iHeight := strconv.FormatInt(height, 10)
+			if err := b.Put([]byte(scid), []byte(iHeight)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (bbs *BboltStore) StoreOwner(scid string, owner string) (changes bool, err error) {
 	bName := "scowner"
 

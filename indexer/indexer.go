@@ -40,24 +40,24 @@ type SCIDToIndexStage struct {
 }
 
 type Indexer struct {
-	LastIndexedHeight int64
-	ChainHeight       int64
-	SearchFilter      []string
-	SFSCIDExclusion   []string
-	GravDBBackend     *storage.GravitonStore
-	BBSBackend        *storage.BboltStore
-	DBType            string
-	Closing           atomic.Bool
-	RPC               *Client
-	Endpoint          string
-	RunMode           string
-	MBLLookup         bool
-	StoreIntegrators  bool
-	ValidatedSCs      []string
-	CloseOnDisconnect bool
-	FastSyncConfig          *structures.FastSyncConfig
-	Status                  string
-	InteractionIndexReady   atomic.Bool
+	LastIndexedHeight     int64
+	ChainHeight           int64
+	SearchFilter          []string
+	SFSCIDExclusion       []string
+	GravDBBackend         *storage.GravitonStore
+	BBSBackend            *storage.BboltStore
+	DBType                string
+	Closing               atomic.Bool
+	RPC                   *Client
+	Endpoint              string
+	RunMode               string
+	MBLLookup             bool
+	StoreIntegrators      bool
+	ValidatedSCs          []string
+	CloseOnDisconnect     bool
+	FastSyncConfig        *structures.FastSyncConfig
+	Status                string
+	InteractionIndexReady atomic.Bool
 	sync.RWMutex
 }
 
@@ -76,22 +76,6 @@ func IsConnected() bool {
 
 func SetConnected(b bool) {
 	connected.Store(b)
-}
-
-// IsFullyQueryable returns true when the indexer is initialized, has a
-// positive last indexed height, has completed its initial interaction height
-// indexing round, and the daemon RPC connection is alive.
-func (indexer *Indexer) IsFullyQueryable() bool {
-	if indexer == nil || indexer.RPC == nil {
-		return false
-	}
-	if indexer.LastIndexedHeight <= 0 {
-		return false
-	}
-	if !indexer.InteractionIndexReady.Load() {
-		return false
-	}
-	return IsConnected()
 }
 
 // local logger
@@ -356,9 +340,6 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	// Mark that the initial interaction height indexing round is complete.
 	indexer.InteractionIndexReady.Store(true)
 
-	// Start background pre-warming of TELA interaction heights.
-	indexer.startTelaPrewarm()
-
 	if storedindex > indexer.LastIndexedHeight {
 		logger.Printf("[StartDaemonMode-storedIndex] Continuing from last indexed height %v", storedindex)
 		indexer.Lock()
@@ -473,7 +454,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 		blockParallelNum = 1
 	}
 
-	if len(pre_validatedSCIDs) > 0 {
+	if len(pre_validatedSCIDs) > 0 && !indexer.FastSyncConfig.NoCode {
 		switch indexer.DBType {
 		case "gravdb":
 			if err := storage.BackfillTelaMetadata(indexer.GravDBBackend); err != nil {
@@ -853,248 +834,244 @@ func (indexer *Indexer) StartWalletMode(runType string) {
 
 // Manually add/inject a SCID to be indexed. Checks validity and then stores within owner tree (no signer addr) and stores a set of current variables.
 func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyncImport, skipfsrecheck bool, varstoreonly bool) (err error) {
-	var wg sync.WaitGroup
-	wg.Add(len(scidstoadd))
-
-	var scilock sync.RWMutex
-	var scidstoindexstage []SCIDToIndexStage
-
 	logger.Printf("[AddSCIDToIndex] Starting - Sorting %v SCIDs to index", len(scidstoadd))
+
 	var tempdb *storage.GravitonStore
-	var treenames []string
 	tempdb, err = storage.NewGravDBRAM("25ms")
 	if err != nil {
 		return fmt.Errorf("[AddSCIDToIndex] Error creating new gravdb: %v", err)
 	}
-	// We know owner is a tree that'll be written to, no need to loop through the scexists func every time when we *know* this one exists and isn't unique by scid etc.
-	treenames = append(treenames, "owner")
+
+	// Use map for O(1) treename lookups instead of O(n) slice scans.
+	treenamesMap := map[string]struct{}{"owner": {}}
 
 	bar := progressbar.Default(int64(len(scidstoadd)), "Adding SCIDs")
+
+	// --- Phase 1: Filter and collect SCIDs that need processing ---
+	var scidsToFetch []string
+	var fsiMap = make(map[string]*structures.FastSyncImport, len(scidstoadd))
 	for scid, fsi := range scidstoadd {
-		go func(scid string, fsi *structures.FastSyncImport) {
-			defer bar.Add(1)
-			// Check if already validated
-			if (scidExist(indexer.ValidatedSCs, scid) || indexer.Closing.Load()) && !varstoreonly {
-				//logger.Debugf("[AddSCIDToIndex] SCID '%v' already in validated list.", scid)
-				wg.Done()
+		bar.Add(1)
+		if (scidExist(indexer.ValidatedSCs, scid) || indexer.Closing.Load()) && !varstoreonly {
+			continue
+		}
+		if scidExist(indexer.SFSCIDExclusion, scid) {
+			logger.Debugf("[StartDaemonMode] Not appending scidstoadd SCID '%s' as it resides within SFSCIDExclusion - '%v'.", scid, indexer.SFSCIDExclusion)
+			continue
+		}
+		fsiMap[scid] = fsi
+		// Only need RPC fetch if we must evaluate search filter or store variables.
+		// NoCode fastsync skips all fetching (contains stays false).
+		if !skipfsrecheck || !indexer.FastSyncConfig.NoCode {
+			scidsToFetch = append(scidsToFetch, scid)
+		}
+	}
 
-				return
-			} else if scidExist(indexer.SFSCIDExclusion, scid) {
-				logger.Debugf("[StartDaemonMode] Not appending scidstoadd SCID '%s' as it resides within SFSCIDExclusion - '%v'.", scid, indexer.SFSCIDExclusion)
+	logger.Printf("[AddSCIDToIndex-DEBUG] After Phase 1: fsiMap=%d scidsToFetch=%d validatedSCs=%d", len(fsiMap), len(scidsToFetch), len(indexer.ValidatedSCs))
 
-				wg.Done()
+	// --- Phase 2: Batch fetch SC data using existing RPC client ---
+	scidstoindexstage := make([]SCIDToIndexStage, 0, len(fsiMap))
 
-				return
-			} else {
-				// Validate SCID is *actually* a valid SCID
-				var scVars []*structures.SCIDVariable
-				var scCode string
+	if len(scidsToFetch) > 0 {
+		if indexer.RPC == nil || indexer.RPC.RPC == nil {
+			logger.Printf("[AddSCIDToIndex] RPC client unavailable, skipping fetch for %d SCIDs", len(scidsToFetch))
+			return fmt.Errorf("rpc client unavailable")
+		}
+
+		batchSize := 500
+		var telaCandidates []string
+
+		for i := 0; i < len(scidsToFetch); i += batchSize {
+			if indexer.Closing.Load() {
+				return nil
+			}
+			end := i + batchSize
+			if end > len(scidsToFetch) {
+				end = len(scidsToFetch)
+			}
+			batch := scidsToFetch[i:end]
+
+			specs := make([]jrpc2.Spec, len(batch))
+			for j, scid := range batch {
+				params := rpc.GetSC_Params{SCID: scid, Variables: true}
+				if skipfsrecheck && !indexer.FastSyncConfig.NoCode {
+					params.Code = true
+				}
+				specs[j] = jrpc2.Spec{Method: "DERO.GetSC", Params: params}
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			responses, err := indexer.RPC.RPC.Batch(ctx, specs)
+			cancel()
+			if err != nil {
+				logger.Printf("[AddSCIDToIndex] Batch fetch error at offset %d: %v", i, err)
+				continue
+			}
+
+			for j, resp := range responses {
+				if j >= len(batch) || resp == nil || resp.Error() != nil {
+					continue
+				}
+				var out rpc.GetSC_Result
+				if err := resp.UnmarshalResult(&out); err != nil {
+					continue
+				}
+
+				scid := batch[j]
+				scVars, scCode, _ := parseGetSCResult(scid, out, nil, nil, nil)
 				var contains bool
-				if !skipfsrecheck {
-					scVars, scCode, _, _ = indexer.RPC.GetSCVariables(scid, indexer.ChainHeight, nil, nil, nil, false)
+				var isTela bool
 
-					// If we can get the SC and searchfilter is "" (get all), contains is true. Otherwise evaluate code against searchfilter
-					if len(indexer.SearchFilter) == 0 {
-						contains = true
-					} else {
-						// Ensure scCode is not blank (e.g. an invalid scid)
-						if scCode != "" {
-							for _, sfv := range indexer.SearchFilter {
-								contains = strings.Contains(scCode, sfv)
-								if contains {
-									// Break b/c we want to ensure contains remains true. Only care if it matches at least 1 case
-									break
-								}
-							}
-						}
-					}
-				} else if !indexer.FastSyncConfig.NoCode {
-					_, scCode, _, _ = indexer.RPC.GetSCVariables(scid, indexer.ChainHeight, nil, nil, nil, true)
-
-					// If we can get the SC and searchfilter is "" (get all), contains is true. Otherwise evaluate code against searchfilter
-					if len(indexer.SearchFilter) == 0 {
-						contains = true
-					} else {
-						// Ensure scCode is not blank (e.g. an invalid scid)
-						if scCode != "" {
-							for _, sfv := range indexer.SearchFilter {
-								contains = strings.Contains(scCode, sfv)
-								if contains {
-									// Break b/c we want to ensure contains remains true. Only care if it matches at least 1 case
-									break
-								}
-							}
+				// Inline TELA classification: check for telaVersion key
+				for _, v := range scVars {
+					if key, ok := v.Key.(string); ok && key == "telaVersion" {
+						if val, ok := v.Value.(string); ok && val != "" {
+							isTela = true
+							break
 						}
 					}
 				}
 
-				scilock.Lock()
-				scidstoindexstage = append(scidstoindexstage, SCIDToIndexStage{scid: scid, fsi: fsi, scVars: scVars, scCode: scCode, contains: contains})
-				scilock.Unlock()
-			}
-			wg.Done()
-		}(scid, fsi)
-	}
-	wg.Wait()
+				if len(indexer.SearchFilter) == 0 {
+					contains = true
+				} else if scCode != "" {
+					for _, sfv := range indexer.SearchFilter {
+						if strings.Contains(scCode, sfv) {
+							contains = true
+							break
+						}
+					}
+				}
 
-	for _, v := range scidstoindexstage {
-		if v.contains || varstoreonly {
-			// By returning valid variables of a given Scid (GetSC --> parse vars), we can conclude it is a valid SCID. Otherwise, skip adding to validated scids
-			if len(v.scVars) > 0 || skipfsrecheck {
+				if isTela {
+					telaCandidates = append(telaCandidates, scid)
+				}
+
+				scidstoindexstage = append(scidstoindexstage, SCIDToIndexStage{
+					scid:     scid,
+					fsi:      fsiMap[scid],
+					scVars:   scVars,
+					scCode:   scCode,
+					contains: contains,
+				})
+			}
+		}
+
+		// Batch-store TELA candidates after classification
+		if len(telaCandidates) > 0 {
+			for _, scid := range telaCandidates {
+				switch indexer.DBType {
+				case "gravdb":
+					indexer.GravDBBackend.StoreTelaCandidate(scid, "valid_index")
+				case "boltdb":
+					indexer.BBSBackend.StoreTelaCandidate(scid, "valid_index")
+				}
+			}
+			logger.Printf("[AddSCIDToIndex] Classified and stored %d TELA candidates", len(telaCandidates))
+		}
+	} else {
+		// NoCode fastsync path: no RPC needed, stage all SCIDs with contains=false.
+		logger.Printf("[AddSCIDToIndex-DEBUG] NoCode path: staging %d SCIDs from fsiMap", len(fsiMap))
+		for scid, fsi := range fsiMap {
+			scidstoindexstage = append(scidstoindexstage, SCIDToIndexStage{
+				scid:     scid,
+				fsi:      fsi,
+				contains: false,
+			})
+		}
+	}
+
+	logger.Printf("[AddSCIDToIndex-DEBUG] Phase 3 start: scidstoindexstage=%d", len(scidstoindexstage))
+
+	// --- Phase 3: Batch store to tempDB using snapshot-safe batch methods ---
+	batchCommitSize := 500
+	for i := 0; i < len(scidstoindexstage); i += batchCommitSize {
+		if indexer.Closing.Load() {
+			return nil
+		}
+
+		end := i + batchCommitSize
+		if end > len(scidstoindexstage) {
+			end = len(scidstoindexstage)
+		}
+
+		owners := make(map[string]string)
+		heights := make(map[string]int64)
+
+		for _, v := range scidstoindexstage[i:end] {
+			if v.contains || varstoreonly {
+				if len(v.scVars) > 0 || skipfsrecheck {
+					indexer.Lock()
+					indexer.ValidatedSCs = append(indexer.ValidatedSCs, v.scid)
+					indexer.Unlock()
+
+					owner := ""
+					if v.fsi != nil {
+						owner = v.fsi.Owner
+					}
+					owners[v.scid] = owner
+
+					height := int64(1)
+					if v.fsi != nil {
+						height = int64(v.fsi.Height)
+					}
+					heights[v.scid] = height
+
+					// Variable details and interaction heights (use legacy per-call for these)
+					svdtree, svdchanges, err := tempdb.StoreSCIDVariableDetails(v.scid, v.scVars, indexer.ChainHeight, true)
+					if err != nil {
+						logger.Errorf("[AddSCIDToIndex] ERR - storing scid variable details: %v", err)
+					} else if svdchanges {
+						tempdb.CommitTrees([]*graviton.Tree{svdtree})
+					}
+					treenamesMap[v.scid+"vars"] = struct{}{}
+
+					sihtree, sihchanges, err := tempdb.StoreSCIDInteractionHeight(v.scid, indexer.ChainHeight, true)
+					if err != nil {
+						logger.Errorf("[AddSCIDToIndex] ERR - storing scid interaction height: %v", err)
+					} else if sihchanges {
+						tempdb.CommitTrees([]*graviton.Tree{sihtree})
+					}
+					treenamesMap[v.scid+"heights"] = struct{}{}
+				}
+			} else if skipfsrecheck {
+				// Limited format: owner + install height only
 				indexer.Lock()
 				indexer.ValidatedSCs = append(indexer.ValidatedSCs, v.scid)
 				indexer.Unlock()
+
+				owner := ""
 				if v.fsi != nil {
-					logger.Debugf("[AddSCIDToIndex] SCID matches search filter. Adding SCID %v / Signer %v", v.scid, v.fsi.Owner)
-				} else {
-					logger.Debugf("[AddSCIDToIndex] SCID matches search filter. Adding SCID %v", v.scid)
+					owner = v.fsi.Owner
 				}
+				owners[v.scid] = owner
 
-				writeWait, _ := time.ParseDuration("20ms")
-				for tempdb.Writing.Load() {
-					if indexer.Closing.Load() {
-						return
-					}
-					//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
-					time.Sleep(writeWait)
-				}
-
-				if indexer.Closing.Load() {
-					return
-				}
-				tempdb.Writing.Store(true)
-				var ctrees []*graviton.Tree
-
-				var sochanges bool
-				var sotree *graviton.Tree
+				height := int64(1)
 				if v.fsi != nil {
-					sotree, sochanges, err = tempdb.StoreOwner(v.scid, v.fsi.Owner, true)
-				} else {
-					sotree, sochanges, err = tempdb.StoreOwner(v.scid, "", true)
+					height = int64(v.fsi.Height)
 				}
-				if err != nil {
-					logger.Errorf("[AddSCIDToIndex] ERR - storing owner: %v", err)
-				} else {
-					if sochanges {
-						ctrees = append(ctrees, sotree)
-					}
-				}
-
-				var shchanges bool
-				var shtree *graviton.Tree
-				if v.fsi != nil {
-					shtree, shchanges, err = tempdb.StoreInstallHeight(v.scid, int64(v.fsi.Height), true)
-				} else {
-					shtree, shchanges, err = tempdb.StoreInstallHeight(v.scid, 1, true)
-				}
-				if err != nil {
-					logger.Errorf("[AddSCIDToIndex] ERR - storing install height: %v", err)
-				} else {
-					if shchanges {
-						ctrees = append(ctrees, shtree)
-					}
-				}
-
-				svdtree, svdchanges, err := tempdb.StoreSCIDVariableDetails(v.scid, v.scVars, indexer.ChainHeight, true)
-				if err != nil {
-					logger.Errorf("[AddSCIDToIndex] ERR - storing scid variable details: %v", err)
-				} else {
-					if svdchanges {
-						ctrees = append(ctrees, svdtree)
-					}
-				}
-				if !scidExist(treenames, v.scid+"vars") {
-					treenames = append(treenames, v.scid+"vars")
-				}
-				sihtree, sihchanges, err := tempdb.StoreSCIDInteractionHeight(v.scid, indexer.ChainHeight, true)
-				if err != nil {
-					logger.Errorf("[AddSCIDToIndex] ERR - storing scid interaction height: %v", err)
-				} else {
-					if sihchanges {
-						ctrees = append(ctrees, sihtree)
-					}
-				}
-				if !scidExist(treenames, v.scid+"heights") {
-					treenames = append(treenames, v.scid+"heights")
-				}
-				if len(ctrees) > 0 {
-					_, err := tempdb.CommitTrees(ctrees)
-					if err != nil {
-						logger.Errorf("[AddSCIDToIndex] ERR - committing trees: %v", err)
-					} else {
-						//logger.Debugf("[AddSCIDToIndex] DEBUG - cv [%v]", cv)
-					}
-				}
-				tempdb.Writing.Store(false)
-			} else {
-				logger.Debugf("[AddSCIDToIndex] ERR - SCID '%v' doesn't exist at height %v", v.scid, indexer.ChainHeight)
+				heights[v.scid] = height
 			}
-		} else if skipfsrecheck {
-			// Generally this clause will be hit if contains is false but also skipfsrecheck is true. This will still store the fastsync data in a limited format
-			indexer.Lock()
-			indexer.ValidatedSCs = append(indexer.ValidatedSCs, v.scid)
-			indexer.Unlock()
-			if v.fsi != nil {
-				logger.Debugf("[AddSCIDToIndex] SCID matches search filter. Adding SCID %v / Signer %v", v.scid, v.fsi.Owner)
-			} else {
-				logger.Debugf("[AddSCIDToIndex] SCID matches search filter. Adding SCID %v", v.scid)
-			}
-
-			writeWait, _ := time.ParseDuration("20ms")
-			for tempdb.Writing.Load() {
-				if indexer.Closing.Load() {
-					return
-				}
-				//logger.Debugf("[Indexer-NewIndexer] GravitonDB is writing... sleeping for %v...", writeWait)
-				time.Sleep(writeWait)
-			}
-
-			if indexer.Closing.Load() {
-				return
-			}
-			tempdb.Writing.Store(true)
-			var ctrees []*graviton.Tree
-
-			var sochanges bool
-			var sotree *graviton.Tree
-			if v.fsi != nil {
-				sotree, sochanges, err = tempdb.StoreOwner(v.scid, v.fsi.Owner, true)
-			} else {
-				sotree, sochanges, err = tempdb.StoreOwner(v.scid, "", true)
-			}
-			if err != nil {
-				logger.Errorf("[AddSCIDToIndex] ERR - storing owner: %v", err)
-			} else {
-				if sochanges {
-					ctrees = append(ctrees, sotree)
-				}
-			}
-
-			var shchanges bool
-			var shtree *graviton.Tree
-			if v.fsi != nil {
-				shtree, shchanges, err = tempdb.StoreInstallHeight(v.scid, int64(v.fsi.Height), true)
-			} else {
-				shtree, shchanges, err = tempdb.StoreInstallHeight(v.scid, 1, true)
-			}
-			if err != nil {
-				logger.Errorf("[AddSCIDToIndex] ERR - storing install height: %v", err)
-			} else {
-				if shchanges {
-					ctrees = append(ctrees, shtree)
-				}
-			}
-
-			if len(ctrees) > 0 {
-				_, err := tempdb.CommitTrees(ctrees)
-				if err != nil {
-					logger.Errorf("[AddSCIDToIndex] ERR - committing trees: %v", err)
-				} else {
-					//logger.Debugf("[AddSCIDToIndex] DEBUG - cv [%v]", cv)
-				}
-			}
-			tempdb.Writing.Store(false)
 		}
+
+		if len(owners) > 0 {
+			if err := tempdb.BatchStoreOwners(owners); err != nil {
+				logger.Errorf("[AddSCIDToIndex] ERR - batch storing owners: %v", err)
+			}
+		}
+		if len(heights) > 0 {
+			if err := tempdb.BatchStoreInstallHeights(heights); err != nil {
+				logger.Errorf("[AddSCIDToIndex] ERR - batch storing heights: %v", err)
+			}
+		}
+
+		logger.Printf("[AddSCIDToIndex-DEBUG] Batch %d-%d: owners=%d heights=%d", i, end, len(owners), len(heights))
+	}
+
+	// Convert treenames map to slice for StoreAltDBInput.
+	treenames := make([]string, 0, len(treenamesMap))
+	for name := range treenamesMap {
+		treenames = append(treenames, name)
 	}
 
 	logger.Printf("[AddSCIDToIndex] Done - Sorting %v SCIDs to index", len(scidstoadd))
@@ -1109,7 +1086,6 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 			if indexer.Closing.Load() {
 				return
 			}
-			//logger.Debugf("[AddSCIDToIndex-StoreAltDBInput] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
 		tempdb.Writing.Store(true)
@@ -1129,7 +1105,6 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 			if indexer.Closing.Load() {
 				return
 			}
-			//logger.Debugf("[AddSCIDToIndex-StoreAltDBInput] GravitonDB is writing... sleeping for %v...", writeWait)
 			time.Sleep(writeWait)
 		}
 		tempdb.Writing.Store(true)
@@ -1144,6 +1119,8 @@ func (indexer *Indexer) AddSCIDToIndex(scidstoadd map[string]*structures.FastSyn
 	return err
 }
 
+// batchGetSCCode fetches only SC code (not variables) for a batch of SCIDs.
+// This is lighter than BatchGetSCData when only search filter evaluation is needed.
 func (indexer *Indexer) indexBlock(blid string, topoheight int64) (blockTxns *structures.BlockTxns, err error) {
 	blockTxns = &structures.BlockTxns{}
 
@@ -3298,101 +3275,178 @@ func (indexer *Indexer) GetRandInteractionAddresses(count int64, config *structu
 	return
 }
 
-// startTelaPrewarm launches a background goroutine that periodically
-// pre-fetches interaction height data for known TELA SCIDs so that
-// subsequent queries are fast. The goroutine exits when the indexer
-// is closing.
-func (indexer *Indexer) startTelaPrewarm() {
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if indexer.Closing.Load() {
-					return
-				}
-
-				var telaMeta []*structures.TelaMetadata
-				switch indexer.DBType {
-				case "gravdb":
-					telaMeta = indexer.GravDBBackend.GetAllTelaMetadata()
-				case "boltdb":
-					telaMeta = indexer.BBSBackend.GetAllTelaMetadata()
-				}
-
-				for _, meta := range telaMeta {
-					if indexer.Closing.Load() {
-						return
-					}
-					if !meta.IsTelaIndex {
-						continue
-					}
-					switch indexer.DBType {
-					case "gravdb":
-						_ = indexer.GravDBBackend.GetSCIDInteractionHeight(meta.SCID)
-					case "boltdb":
-						_ = indexer.BBSBackend.GetSCIDInteractionHeight(meta.SCID)
-					}
-				}
-			}
+// GetTelaCandidates returns all SCIDs that have been classified as TELA apps
+// during AddSCIDToIndex. This allows consumers to skip the expensive 49K-SCID
+// prefilter and query only known TELA candidates.
+func (indexer *Indexer) GetTelaCandidates() []string {
+	var candidates map[string]string
+	switch indexer.DBType {
+	case "gravdb":
+		candidates = indexer.GravDBBackend.GetAllTelaCandidates()
+	case "boltdb":
+		candidates = indexer.BBSBackend.GetAllTelaCandidates()
+	}
+	// Filter to only valid_index entries
+	var result []string
+	for scid, status := range candidates {
+		if status == "valid_index" || status == "tela" {
+			result = append(result, scid)
 		}
-	}()
+	}
+	return result
 }
 
-// BatchGetSCData fetches smart-contract variables, code, and balances for a
-// batch of SCIDs using a single batched RPC call. It uses GetHealthyRPC to
-// ensure the connection is alive before issuing the batch. Results are returned
-// as a map keyed by SCID. SCIDs that fail individual lookup are omitted from
-// the result map but do not fail the entire batch.
-func (indexer *Indexer) BatchGetSCData(scids []string) (map[string]*structures.SCData, error) {
-	if len(scids) == 0 {
-		return map[string]*structures.SCData{}, nil
+// BackfillTelaCandidates scans all existing SCIDs in storage and classifies
+// TELA candidates using a dedicated pool of fresh RPC connections. This avoids
+// conflicts with the main indexing loop which constantly uses indexer.RPC.
+// The workers parameter controls how many parallel RPC connections to use.
+// It should be called in a background goroutine.
+func (indexer *Indexer) BackfillTelaCandidates(workers int) error {
+	existing := indexer.GetTelaCandidates()
+	if len(existing) > 0 {
+		logger.Printf("[BackfillTelaCandidates] Already have %d candidates, skipping\n", len(existing))
+		return nil
 	}
 
-	client, cleanup, err := indexer.RPC.GetHealthyRPC()
+	var allSCIDs map[string]string
+	switch indexer.DBType {
+	case "gravdb":
+		allSCIDs = indexer.GravDBBackend.GetAllOwnersAndSCIDs()
+	case "boltdb":
+		allSCIDs = indexer.BBSBackend.GetAllOwnersAndSCIDs()
+	}
+	if len(allSCIDs) == 0 {
+		logger.Printf("[BackfillTelaCandidates] No SCIDs in storage, skipping\n")
+		return nil
+	}
+
+	logger.Printf("[BackfillTelaCandidates] Starting backfill for %d SCIDs with %d workers\n", len(allSCIDs), workers)
+
+	scids := make([]string, 0, len(allSCIDs))
+	for scid := range allSCIDs {
+		scids = append(scids, scid)
+	}
+	sort.Strings(scids)
+
+	if workers <= 0 {
+		workers = 4
+	}
+
+	pool, cleanup, err := DialRPCPool(indexer.Endpoint, workers)
 	if err != nil {
-		return nil, err
+		logger.Printf("[BackfillTelaCandidates] Failed to dial RPC pool: %v\n", err)
+		return err
 	}
 	defer cleanup()
 
-	specs := make([]jrpc2.Spec, 0, len(scids))
-	for _, scid := range scids {
-		specs = append(specs, jrpc2.Spec{
-			Method: "DERO.GetSC",
-			Params: rpc.GetSC_Params{SCID: scid, Code: true, Variables: true},
-		})
+	batchSize := 500
+	total := len(scids)
+	type result struct {
+		scid   string
+		isTela bool
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	workCh := make(chan []string, workers*2)
+	resultCh := make(chan result, workers*2)
+	var wg sync.WaitGroup
 
-	responses, err := client.Batch(ctx, specs)
-	if err != nil {
-		return nil, fmt.Errorf("batch GetSC failed: %w", err)
+	// Launch workers
+	for w := 0; w < len(pool); w++ {
+		wg.Add(1)
+		go func(client *jrpc2.Client) {
+			defer wg.Done()
+			for batch := range workCh {
+				if indexer.Closing.Load() {
+					return
+				}
+				specs := make([]jrpc2.Spec, len(batch))
+				for j, scid := range batch {
+					specs[j] = jrpc2.Spec{
+						Method: "DERO.GetSC",
+						Params: rpc.GetSC_Params{
+							SCID:       scid,
+							KeysString: []string{"telaVersion"},
+						},
+					}
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				responses, err := client.Batch(ctx, specs)
+				cancel()
+				if err != nil {
+					logger.Printf("[BackfillTelaCandidates] Worker batch error: %v\n", err)
+					continue
+				}
+				for j, resp := range responses {
+					if j >= len(batch) || resp == nil || resp.Error() != nil {
+						continue
+					}
+					var out rpc.GetSC_Result
+					if err := resp.UnmarshalResult(&out); err != nil {
+						continue
+					}
+					isTela := false
+					for k, v := range out.VariableStringKeys {
+						if k == "telaVersion" {
+							if val, ok := v.(string); ok && val != "" {
+								isTela = true
+								break
+							}
+						}
+					}
+					resultCh <- result{scid: batch[j], isTela: isTela}
+				}
+			}
+		}(pool[w])
 	}
 
-	results := make(map[string]*structures.SCData, len(scids))
-	for i, resp := range responses {
-		if resp.Error() != nil {
-			logger.Debugf("[BatchGetSCData] skipping %s due to RPC error: %v", scids[i], resp.Error())
-			continue
+	// Collector goroutine: stores candidates and counts progress
+	var found int
+	var processed int
+	doneCh := make(chan struct{})
+	go func() {
+		for r := range resultCh {
+			if r.isTela {
+				found++
+				switch indexer.DBType {
+				case "gravdb":
+					indexer.GravDBBackend.StoreTelaCandidate(r.scid, "valid_index")
+				case "boltdb":
+					indexer.BBSBackend.StoreTelaCandidate(r.scid, "valid_index")
+				}
+			}
+			processed++
 		}
-		var getSCResult rpc.GetSC_Result
-		if err := resp.UnmarshalResult(&getSCResult); err != nil {
-			logger.Debugf("[BatchGetSCData] skipping %s due to unmarshal error: %v", scids[i], err)
-			continue
+		close(doneCh)
+	}()
+
+	// Feed work queue
+	batchCount := 0
+	for i := 0; i < total; i += batchSize {
+		if indexer.Closing.Load() {
+			logger.Printf("[BackfillTelaCandidates] Interrupted: indexer closing\n")
+			break
 		}
-		vars, code, balances := parseGetSCResult(scids[i], getSCResult, nil, nil, nil)
-		results[scids[i]] = &structures.SCData{
-			SCID:      scids[i],
-			Variables: vars,
-			Code:      code,
-			Balances:  balances,
+		end := i + batchSize
+		if end > total {
+			end = total
+		}
+		workCh <- scids[i:end]
+		batchCount++
+		if batchCount%10 == 0 {
+			logger.Printf("[BackfillTelaCandidates] Progress: %d/%d SCIDs checked, found %d candidates\n", end, total, found)
 		}
 	}
+	close(workCh)
 
-	return results, nil
+	// Wait for workers to finish, then close result channel
+	wg.Wait()
+	close(resultCh)
+
+	// Wait for collector to finish
+	<-doneCh
+
+	logger.Printf("[BackfillTelaCandidates] Done. Checked %d SCIDs, found %d TELA candidates\n", total, found)
+	return nil
 }
 
 // Close cleanly the indexer
