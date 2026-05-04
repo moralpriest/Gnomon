@@ -3327,9 +3327,9 @@ func (indexer *Indexer) GetTelaCandidates() []string {
 // It should be called in a background goroutine.
 func (indexer *Indexer) BackfillTelaCandidates(workers int) error {
 	existing := indexer.GetTelaCandidates()
-	if len(existing) > 0 {
-		logger.Printf("[BackfillTelaCandidates] Already have %d candidates, skipping\n", len(existing))
-		return nil
+	existingMap := make(map[string]bool, len(existing))
+	for _, scid := range existing {
+		existingMap[scid] = true
 	}
 
 	var allSCIDs map[string]string
@@ -3344,13 +3344,19 @@ func (indexer *Indexer) BackfillTelaCandidates(workers int) error {
 		return nil
 	}
 
-	logger.Printf("[BackfillTelaCandidates] Starting backfill for %d SCIDs with %d workers\n", len(allSCIDs), workers)
-
 	scids := make([]string, 0, len(allSCIDs))
 	for scid := range allSCIDs {
-		scids = append(scids, scid)
+		if !existingMap[scid] {
+			scids = append(scids, scid)
+		}
+	}
+	if len(scids) == 0 {
+		logger.Printf("[BackfillTelaCandidates] All %d SCIDs already known as TELA candidates, skipping\n", len(allSCIDs))
+		return nil
 	}
 	sort.Strings(scids)
+
+	logger.Printf("[BackfillTelaCandidates] Starting backfill for %d unknown SCIDs (already know %d) with %d workers\n", len(scids), len(existing), workers)
 
 	if workers <= 0 {
 		workers = 4
