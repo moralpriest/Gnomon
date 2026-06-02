@@ -135,6 +135,7 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	// Continuously getInfo from daemon to update topoheight globally
 	go indexer.getInfo()
 
+	logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
 	for {
 		if indexer.Closing.Load() {
 			// Break out on closing call
@@ -144,7 +145,6 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 		chainHeight := indexer.ChainHeight
 		indexer.RUnlock()
 		if chainHeight == int64(0) {
-			logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
