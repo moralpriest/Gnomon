@@ -118,13 +118,13 @@ func (indexer *Indexer) StartDaemonMode(blockParallelNum int) {
 	go indexer.getInfo()
 	time.Sleep(1 * time.Second)
 
+	logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
 	for {
 		if indexer.Closing {
 			// Break out on closing call
 			break
 		}
 		if indexer.ChainHeight == int64(0) {
-			logger.Printf("[StartDaemonMode] Waiting on GetInfo...")
 			time.Sleep(1 * time.Second)
 			continue
 		}
